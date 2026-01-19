@@ -2,13 +2,13 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { Group } from '../types';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, 
-  PieChart, Pie, Legend, AreaChart, Area
+  PieChart, Pie, Legend, AreaChart, Area, ScatterChart, Scatter, ZAxis, ReferenceLine
 } from 'recharts';
 import { 
   Trophy, AlertTriangle, TrendingUp, Printer, Users, Target, 
   UserCheck, Check, X, Minus, Calendar, BarChart2, FileDown, RotateCcw, 
   ArrowUpRight, Activity, Percent, PieChart as PieChartIcon, Download, CalendarDays,
-  FileText, Filter
+  FileText, Filter, LayoutGrid
 } from 'lucide-react';
 import clsx from 'clsx';
 import { getAllDates, exportToCSV } from '../services/dataProcessor';
@@ -315,6 +315,8 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
     { name: 'Absent', value: reportData.sessionStats.absent },
     { name: 'Pending', value: reportData.sessionStats.unrecorded },
   ];
+  
+  const avgGroupSize = Math.round(reportData.totalMembers / Math.max(1, groups.length));
 
   return (
     <div className="space-y-8 animate-fade-in pb-12 font-sans">
@@ -469,55 +471,53 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* 4. Group Performance Chart */}
+          {/* 4. Engagement Matrix (Upgrade from simple Bar Chart) */}
           <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
              <div className="flex items-center justify-between mb-6">
                 <div>
-                    <h3 className="text-lg font-bold text-slate-900">Group Performance Matrix</h3>
-                    <p className="text-xs text-slate-500">Attendance rate by group leader</p>
+                    <h3 className="text-lg font-bold text-slate-900">Engagement Matrix</h3>
+                    <p className="text-xs text-slate-500">Efficiency (Rate) vs. Scale (Size) Analysis</p>
                 </div>
-                <BarChart2 className="h-5 w-5 text-slate-400" />
+                <LayoutGrid className="h-5 w-5 text-slate-400" />
              </div>
              <div className="h-80 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={reportData.groupMetrics} margin={{ top: 10, right: 10, left: 0, bottom: 0 }} layout="vertical">
-                         <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#f1f5f9" />
-                         <XAxis type="number" domain={[0, 100]} hide />
-                         <YAxis 
-                            dataKey="name" 
-                            type="category" 
-                            width={120} 
-                            tick={{fontSize: 12, fill: '#64748b'}} 
-                            axisLine={false} 
-                            tickLine={false}
-                         />
-                         <Tooltip 
-                            cursor={{fill: '#f8fafc'}}
+                    <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                        <XAxis type="number" dataKey="memberCount" name="Group Size" unit=" mbrs" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
+                        <YAxis type="number" dataKey="attendance" name="Attendance Rate" unit="%" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} domain={[0, 100]} />
+                        <Tooltip 
+                            cursor={{ strokeDasharray: '3 3' }} 
                             content={({ active, payload }) => {
                                 if (active && payload && payload.length) {
-                                return (
-                                    <div className="bg-slate-900 text-white text-xs p-3 rounded-lg shadow-xl">
-                                        <p className="font-bold mb-1">{payload[0].payload.name}</p>
-                                        <div className="flex justify-between gap-4">
-                                            <span>Efficiency:</span>
-                                            <span className="font-bold">{payload[0].value}%</span>
+                                    const data = payload[0].payload;
+                                    return (
+                                        <div className="bg-white p-3 border border-slate-200 shadow-lg rounded-lg text-xs z-50 min-w-[150px]">
+                                            <p className="font-bold text-slate-900 mb-2 border-b border-slate-100 pb-1">{data.name}</p>
+                                            <div className="space-y-1">
+                                                <div className="flex justify-between gap-4">
+                                                    <span className="text-slate-500">Efficiency:</span>
+                                                    <span className="font-bold text-brand-600">{data.attendance}%</span>
+                                                </div>
+                                                <div className="flex justify-between gap-4">
+                                                    <span className="text-slate-500">Size:</span>
+                                                    <span className="font-bold text-slate-700">{data.memberCount}</span>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div className="flex justify-between gap-4 opacity-80">
-                                            <span>Members:</span>
-                                            <span>{payload[0].payload.memberCount}</span>
-                                        </div>
-                                    </div>
-                                );
+                                    );
                                 }
                                 return null;
                             }}
-                         />
-                         <Bar dataKey="attendance" radius={[0, 4, 4, 0]} barSize={20}>
+                        />
+                        <ReferenceLine x={avgGroupSize} stroke="#cbd5e1" strokeDasharray="3 3" label={{ value: 'Avg Size', position: 'insideTopRight', fontSize: 10, fill: '#94a3b8' }} />
+                        <ReferenceLine y={reportData.overallRate} stroke="#cbd5e1" strokeDasharray="3 3" label={{ value: 'Avg Rate', position: 'insideRight', fontSize: 10, fill: '#94a3b8' }} />
+                        <Scatter name="Groups" data={reportData.groupMetrics} fill="#0f766e" shape="circle">
                              {reportData.groupMetrics.map((entry, index) => (
                                 <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                              ))}
-                         </Bar>
-                    </BarChart>
+                        </Scatter>
+                    </ScatterChart>
                 </ResponsiveContainer>
              </div>
           </div>
