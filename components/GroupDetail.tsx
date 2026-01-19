@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Group, AttendanceStatus, Member } from '../types';
-import { ArrowLeft, Phone, Search, Check, X, Minus, CheckCircle, XCircle, Trash2, UserPlus, Plus, History, Calendar, User, ArrowDown, Edit2, Settings, Zap, ChevronLeft, ChevronRight, CalendarPlus } from 'lucide-react';
+import { ArrowLeft, Phone, Search, Check, X, Minus, CheckCircle, XCircle, Trash2, UserPlus, Plus, History, Calendar, User, ArrowDown, Edit2, Settings, Zap, ChevronLeft, ChevronRight, CalendarPlus, Filter } from 'lucide-react';
 import clsx from 'clsx';
 import { getAllDates } from '../services/dataProcessor';
 
@@ -36,21 +36,64 @@ const GroupDetail: React.FC<GroupDetailProps> = ({
   const [isAddSessionOpen, setIsAddSessionOpen] = useState(false);
   const [newSessionDate, setNewSessionDate] = useState('');
   
+  // Filter State
+  const dates = useMemo(() => getAllDates(allGroups), [allGroups]);
+  const [viewDate, setViewDate] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<'All' | 'P' | 'A' | 'Unrecorded'>('All');
+
   const [sortConfig, setSortConfig] = useState<{ date: string; type: 'present' | 'absent' } | null>(null);
   
   // Form State
   const [memberFormData, setMemberFormData] = useState({ name: '', phone: '' });
 
+  // Initialize view date to latest
+  useEffect(() => {
+      if (dates.length > 0 && !viewDate) {
+          setViewDate(dates[dates.length - 1]);
+      }
+  }, [dates]);
+
+  // Sync action date (table header click) to view date
+  useEffect(() => {
+      if (actionDate) {
+          setViewDate(actionDate);
+      }
+  }, [actionDate]);
+
   useEffect(() => { setSortConfig(null); }, [group.id]);
   
-  const dates = useMemo(() => getAllDates(allGroups), [allGroups]);
-  
+  // Calculate counts for the view filter
+  const filterCounts = useMemo(() => {
+      if (!viewDate) return { all: 0, p: 0, a: 0, u: 0 };
+      let p = 0, a = 0, u = 0;
+      group.members.forEach(m => {
+          const s = m.attendance[viewDate];
+          if (s === 'P') p++;
+          else if (s === 'A') a++;
+          else u++;
+      });
+      return { all: group.members.length, p, a, u };
+  }, [group.members, viewDate]);
+
   const filteredMembers = useMemo(() => {
+    // 1. Text Search
     let members = group.members.filter(m => 
         m.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
         m.phone.includes(searchTerm)
     );
 
+    // 2. Status Filter (only if viewDate is valid)
+    if (viewDate && statusFilter !== 'All') {
+        members = members.filter(m => {
+            const status = m.attendance[viewDate];
+            if (statusFilter === 'P') return status === 'P';
+            if (statusFilter === 'A') return status === 'A';
+            if (statusFilter === 'Unrecorded') return !status || status === '';
+            return true;
+        });
+    }
+
+    // 3. Sorting
     if (sortConfig) {
         members = [...members].sort((a, b) => {
              const sA = a.attendance[sortConfig.date];
@@ -64,7 +107,7 @@ const GroupDetail: React.FC<GroupDetailProps> = ({
     }
     // No default sorting - strictly preserve CSV/Array order
     return members;
-  }, [group.members, searchTerm, sortConfig]);
+  }, [group.members, searchTerm, sortConfig, viewDate, statusFilter]);
 
   const groupStats = useMemo(() => {
       let present = 0; let total = 0;
@@ -116,6 +159,7 @@ const GroupDetail: React.FC<GroupDetailProps> = ({
       e.preventDefault();
       if(newSessionDate) {
           onAddSession(newSessionDate);
+          setViewDate(newSessionDate);
           setIsAddSessionOpen(false);
           setNewSessionDate('');
       }
@@ -159,6 +203,62 @@ const GroupDetail: React.FC<GroupDetailProps> = ({
         </div>
       </div>
 
+      {/* Filter Toolbar */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+             <div className="relative w-full sm:w-auto">
+                <Calendar className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <select 
+                    value={viewDate}
+                    onChange={(e) => setViewDate(e.target.value)}
+                    className="w-full sm:w-48 pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-brand-500 outline-none appearance-none cursor-pointer"
+                >
+                    {dates.slice().reverse().map(d => (
+                        <option key={d} value={d}>
+                            {new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </option>
+                    ))}
+                </select>
+                <ChevronDownIcon className="absolute right-3 top-3 h-3 w-3 text-slate-400 pointer-events-none" />
+             </div>
+             <div className="hidden sm:block h-6 w-px bg-slate-200" />
+             <span className="text-xs font-semibold text-slate-400 hidden sm:inline-block uppercase tracking-wider">Filter Status:</span>
+        </div>
+
+        <div className="flex w-full sm:w-auto bg-slate-100 p-1 rounded-lg">
+            <FilterButton 
+                active={statusFilter === 'All'} 
+                onClick={() => setStatusFilter('All')} 
+                label="All" 
+                count={filterCounts.all}
+            />
+            <FilterButton 
+                active={statusFilter === 'P'} 
+                onClick={() => setStatusFilter('P')} 
+                label="Present" 
+                count={filterCounts.p}
+                icon={Check}
+                activeClass="bg-white text-green-700 shadow-sm ring-1 ring-black/5"
+            />
+             <FilterButton 
+                active={statusFilter === 'A'} 
+                onClick={() => setStatusFilter('A')} 
+                label="Absent" 
+                count={filterCounts.a}
+                icon={X}
+                activeClass="bg-white text-red-700 shadow-sm ring-1 ring-black/5"
+            />
+             <FilterButton 
+                active={statusFilter === 'Unrecorded'} 
+                onClick={() => setStatusFilter('Unrecorded')} 
+                label="Pending" 
+                count={filterCounts.u}
+                icon={Minus}
+                activeClass="bg-white text-slate-700 shadow-sm ring-1 ring-black/5"
+            />
+        </div>
+      </div>
+
       {/* Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col pb-12">
         <div className="overflow-x-auto no-scrollbar">
@@ -168,16 +268,28 @@ const GroupDetail: React.FC<GroupDetailProps> = ({
                 <th className="sticky left-0 z-10 bg-slate-50 px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase border-r border-slate-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] w-56">Member</th>
                 {dates.map(date => {
                     const isSorted = sortConfig?.date === date;
+                    const isViewDate = viewDate === date;
                     const d = new Date(date);
                     return (
-                        <th key={date} onClick={() => setActionDate(date)} className={clsx("px-2 py-3 text-center text-xs font-medium uppercase tracking-wider min-w-[70px] cursor-pointer hover:bg-slate-100 transition-colors group relative", isSorted && "bg-brand-50 text-brand-700")}>
+                        <th 
+                            key={date} 
+                            onClick={() => setActionDate(date)} 
+                            className={clsx(
+                                "px-2 py-3 text-center text-xs font-medium uppercase tracking-wider min-w-[70px] cursor-pointer transition-colors group relative border-l border-transparent",
+                                isSorted && "bg-brand-50 text-brand-700",
+                                isViewDate && !isSorted && "bg-slate-100 border-l-slate-200 border-r-slate-200"
+                            )}
+                        >
                             <div className="flex flex-col items-center">
-                                <span className="font-bold text-base">{d.getDate()}</span>
-                                <span className="text-[10px]">{d.toLocaleString('default', { month: 'short' })}</span>
+                                <span className={clsx("font-bold text-base", isViewDate ? "text-slate-900" : "text-slate-500")}>{d.getDate()}</span>
+                                <span className="text-[10px] text-slate-400">{d.toLocaleString('default', { month: 'short' })}</span>
                                 {isSorted && (
                                     <div className={clsx("mt-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold", sortConfig.type === 'present' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700")}>
                                         {sortConfig.type === 'present' ? 'P' : 'A'} Sorted
                                     </div>
+                                )}
+                                {isViewDate && !isSorted && (
+                                    <div className="mt-1 w-1 h-1 rounded-full bg-brand-500" />
                                 )}
                             </div>
                         </th>
@@ -209,8 +321,9 @@ const GroupDetail: React.FC<GroupDetailProps> = ({
                   </td>
                   {dates.map(date => {
                       const status = member.attendance[date];
+                      const isViewDate = viewDate === date;
                       return (
-                        <td key={date} className="px-1 py-1 text-center p-0">
+                        <td key={date} className={clsx("px-1 py-1 text-center p-0", isViewDate && "bg-slate-50/30")}>
                             <button 
                                 onClick={() => {
                                     // Cycle: Empty -> P -> A -> Empty
@@ -229,6 +342,17 @@ const GroupDetail: React.FC<GroupDetailProps> = ({
                   <td className="bg-slate-50/50"></td>
                 </tr>
               ))}
+              {filteredMembers.length === 0 && (
+                  <tr>
+                      <td colSpan={dates.length + 2} className="px-6 py-12 text-center text-slate-500">
+                          <div className="flex flex-col items-center gap-2">
+                              <Filter className="h-8 w-8 text-slate-300" />
+                              <p>No members match the current filter.</p>
+                              <button onClick={() => { setSearchTerm(''); setStatusFilter('All'); }} className="text-brand-600 text-sm font-bold hover:underline">Clear Filters</button>
+                          </div>
+                      </td>
+                  </tr>
+              )}
             </tbody>
             <tfoot className="bg-slate-50 border-t border-slate-200 sticky bottom-0 z-20 shadow-[0_-2px_5px_-2px_rgba(0,0,0,0.1)]">
                 <tr>
@@ -470,5 +594,33 @@ const GroupDetail: React.FC<GroupDetailProps> = ({
     </div>
   );
 };
+
+// Helper component for filter buttons
+interface FilterButtonProps {
+    active: boolean;
+    onClick: () => void;
+    label: string;
+    count: number;
+    icon?: React.ElementType;
+    activeClass?: string;
+}
+
+const FilterButton: React.FC<FilterButtonProps> = ({ active, onClick, label, count, icon: Icon, activeClass = "bg-white text-slate-900 shadow-sm ring-1 ring-black/5" }) => (
+    <button 
+        onClick={onClick}
+        className={clsx(
+            "flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-xs font-bold transition-all",
+            active ? activeClass : "text-slate-500 hover:text-slate-700 hover:bg-slate-200/50"
+        )}
+    >
+        {Icon && <Icon className="h-3 w-3" />}
+        <span>{label}</span>
+        {count !== undefined && <span className="opacity-60 text-[10px] ml-0.5">({count})</span>}
+    </button>
+);
+
+const ChevronDownIcon = ({ className }: { className?: string }) => (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+);
 
 export default GroupDetail;

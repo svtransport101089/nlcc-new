@@ -1,13 +1,14 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Group } from '../types';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, 
-  PieChart, Pie, Legend, LineChart, Line, AreaChart, Area
+  PieChart, Pie, Legend, AreaChart, Area
 } from 'recharts';
 import { 
   Trophy, AlertTriangle, TrendingUp, Printer, Users, Target, 
   UserCheck, Check, X, Minus, Calendar, BarChart2, FileDown, RotateCcw, 
-  ArrowUpRight, Activity, Percent, PieChart as PieChartIcon
+  ArrowUpRight, Activity, Percent, PieChart as PieChartIcon, Download, CalendarDays,
+  FileText, Filter
 } from 'lucide-react';
 import clsx from 'clsx';
 import { getAllDates, exportToCSV } from '../services/dataProcessor';
@@ -32,21 +33,86 @@ const KPICard = ({ title, value, subtext, icon: Icon, trend }: any) => (
   </div>
 );
 
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-white p-3 border border-slate-100 shadow-xl rounded-lg text-xs">
+        <p className="font-bold text-slate-900 mb-1">{label}</p>
+        {payload.map((entry: any, index: number) => (
+          <div key={index} className="flex items-center gap-2 mb-0.5">
+            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
+            <span className="text-slate-500 capitalize">{entry.name}:</span>
+            <span className="font-bold text-slate-700">{entry.value}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
+
 const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
   const dates = useMemo(() => getAllDates(groups), [groups]);
-  const lastDate = dates[dates.length - 1];
-  const secondLastDate = dates[dates.length - 2];
+  const [selectedDate, setSelectedDate] = useState<string>('');
+  
+  // Date Range Filter State
+  const [dateRange, setDateRange] = useState<{start: string, end: string}>({ start: '', end: '' });
+
+  // Initialize Date Range
+  useEffect(() => {
+      if (dates.length > 0 && (!dateRange.start || !dateRange.end)) {
+          setDateRange({ start: dates[0], end: dates[dates.length - 1] });
+      }
+  }, [dates]);
+
+  // Derived Filtered Dates
+  const filteredDates = useMemo(() => {
+      if (!dateRange.start || !dateRange.end) return [];
+      return dates.filter(d => d >= dateRange.start && d <= dateRange.end);
+  }, [dates, dateRange]);
+
+  // Sync selectedDate with filtered range
+  useEffect(() => {
+    if (filteredDates.length > 0) {
+        if (!selectedDate || !filteredDates.includes(selectedDate)) {
+             setSelectedDate(filteredDates[filteredDates.length - 1]);
+        }
+    } else {
+        setSelectedDate('');
+    }
+  }, [filteredDates, selectedDate]);
 
   // Analysis Logic
   const reportData = useMemo(() => {
-    // 1. Group Metrics
+    // If no dates match filter, return safe defaults
+    if (filteredDates.length === 0) {
+        return {
+            groupMetrics: [],
+            memberLeaderboard: [],
+            atRiskMembers: [],
+            totalMembers: groups.reduce((acc, g) => acc + g.members.length, 0),
+            overallRate: 0,
+            bestGroup: null,
+            sessionStats: { present: 0, absent: 0, unrecorded: 0 },
+            groupSessionStats: [],
+            trendData: [],
+            sessionHistory: []
+        };
+    }
+
+    const lastDate = filteredDates[filteredDates.length - 1];
+    const secondLastDate = filteredDates.length > 1 ? filteredDates[filteredDates.length - 2] : null;
+    const targetDate = selectedDate || lastDate;
+
+    // 1. Group Metrics (Overall - WITHIN RANGE)
     const groupMetrics = groups.map(g => {
       let present = 0;
       let total = 0;
       g.members.forEach(m => {
-        Object.values(m.attendance).forEach(status => {
-          if (status === 'P') present++;
-          if (status === 'P' || status === 'A') total++;
+        filteredDates.forEach(date => {
+            const status = m.attendance[date];
+            if (status === 'P') present++;
+            if (status === 'P' || status === 'A') total++;
         });
       });
       const avg = total > 0 ? (present / total) * 100 : 0;
@@ -59,12 +125,17 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
       };
     }).sort((a, b) => b.attendance - a.attendance);
 
-    // 2. Member Leaderboard
+    // 2. Member Leaderboard (WITHIN RANGE)
     const memberLeaderboard = groups.flatMap(g => 
       g.members.map(m => {
-        const history = Object.values(m.attendance);
-        const present = history.filter(s => s === 'P').length;
-        const total = history.filter(s => s === 'P' || s === 'A').length;
+        let present = 0;
+        let total = 0;
+        filteredDates.forEach(date => {
+            const status = m.attendance[date];
+            if (status === 'P') present++;
+            if (status === 'P' || status === 'A') total++;
+        });
+
         const rate = total > 0 ? (present / total) * 100 : 0;
         return {
           name: m.name,
@@ -74,12 +145,13 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
           presentSessions: present
         };
       })
-    ).filter(m => m.totalSessions >= 3) // Minimum sessions to be considered
+    ).filter(m => m.totalSessions >= 1) // Show anyone with activity in this range
      .sort((a, b) => b.rate - a.rate || b.totalSessions - a.totalSessions)
      .slice(0, 5);
 
-    // 3. At Risk Members (Missed last 2 sessions)
-    const atRiskMembers = groups.flatMap(g => 
+    // 3. At Risk Members (Based on END of Range)
+    // Only calculated if we have at least 2 dates in the filter or history
+    const atRiskMembers = secondLastDate ? groups.flatMap(g => 
       g.members.filter(m => {
         const lastStatus = m.attendance[lastDate];
         const prevStatus = m.attendance[secondLastDate];
@@ -90,30 +162,29 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
         phone: m.phone,
         missedStreak: 2
       }))
-    ).slice(0, 5);
+    ).slice(0, 5) : [];
 
-    // 4. Global Stats
+    // 4. Global Stats (WITHIN RANGE)
     const totalMembers = groups.reduce((acc, g) => acc + g.members.length, 0);
     const overallRate = Math.round(groupMetrics.reduce((acc, m) => acc + m.attendance, 0) / (groupMetrics.length || 1));
     const bestGroup = groupMetrics[0];
 
-    // 5. Latest Session Breakdown
-    const latestStats = { present: 0, absent: 0, unrecorded: 0 };
-    const groupLatestStats = groups.map(g => {
+    // 5. Selected Session Breakdown
+    const sessionStats = { present: 0, absent: 0, unrecorded: 0 };
+    const groupSessionStats = groups.map(g => {
         let present = 0;
         let absent = 0;
         let unrecorded = 0;
         g.members.forEach(m => {
-             const status = m.attendance[lastDate];
+             const status = m.attendance[targetDate];
              if (status === 'P') present++;
              else if (status === 'A') absent++;
              else unrecorded++;
         });
         
-        // Update global
-        latestStats.present += present;
-        latestStats.absent += absent;
-        latestStats.unrecorded += unrecorded;
+        sessionStats.present += present;
+        sessionStats.absent += absent;
+        sessionStats.unrecorded += unrecorded;
 
         return {
             id: g.id,
@@ -124,6 +195,54 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
         };
     }).sort((a, b) => b.present - a.present);
 
+    // 6. Trends Data (WITHIN RANGE)
+    const trendData = filteredDates.map(d => {
+        let p = 0;
+        let t = 0;
+        groups.forEach(g => {
+            g.members.forEach(m => {
+                if (m.attendance[d] === 'P') p++;
+                if (m.attendance[d] === 'P' || m.attendance[d] === 'A') t++;
+            });
+        });
+        return {
+            date: d,
+            formattedDate: new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            rate: t > 0 ? Math.round((p / t) * 100) : 0,
+            present: p
+        };
+    });
+
+    // 7. Session History Report (WITHIN RANGE)
+    // Show all sessions in range, reverse chronological
+    const sessionHistory = filteredDates.slice().reverse().map(date => {
+        let present = 0;
+        let absent = 0;
+        let total = 0;
+        let bestGroup = { name: '-', count: -1 };
+
+        groups.forEach(g => {
+            let gPresent = 0;
+            g.members.forEach(m => {
+                const s = m.attendance[date];
+                if (s === 'P') { present++; gPresent++; }
+                if (s === 'A') absent++;
+                if (s === 'P' || s === 'A') total++;
+            });
+            if (gPresent > bestGroup.count) {
+                bestGroup = { name: g.leaderName, count: gPresent };
+            }
+        });
+
+        return {
+            date,
+            present,
+            absent,
+            rate: total > 0 ? Math.round((present / total) * 100) : 0,
+            topGroup: bestGroup.name
+        };
+    });
+
     return { 
         groupMetrics, 
         memberLeaderboard, 
@@ -131,10 +250,12 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
         totalMembers, 
         overallRate, 
         bestGroup,
-        latestStats,
-        groupLatestStats
+        sessionStats,
+        groupSessionStats,
+        trendData,
+        sessionHistory
     };
-  }, [groups, lastDate, secondLastDate]);
+  }, [groups, filteredDates, selectedDate]);
 
   const handleExport = () => {
     const csvContent = exportToCSV(groups);
@@ -149,47 +270,121 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
     document.body.removeChild(link);
   };
 
-  // Professional Teal/Slate Palette
-  const CHART_COLORS = ['#0f766e', '#0d9488', '#14b8a6', '#5eead4', '#99f6e4', '#ccfbf1'];
-  const PIE_COLORS = ['#10b981', '#ef4444', '#cbd5e1']; // Present (Green), Absent (Red), Unrecorded (Slate)
+  const downloadSessionReport = (dateStr: string) => {
+    if (!dateStr) return;
+    
+    const headers = ['Group', 'Member Name', 'Phone', 'Status', 'Date'];
+    const rows = [headers.join(',')];
+    
+    groups.forEach(g => {
+        g.members.forEach(m => {
+            const status = m.attendance[dateStr];
+            const statusLabel = status === 'P' ? 'Present' : status === 'A' ? 'Absent' : 'Unrecorded';
+            rows.push([
+                `"${g.leaderName}"`,
+                `"${m.name}"`,
+                `"${m.phone || ''}"`,
+                `"${statusLabel}"`,
+                `"${dateStr}"`
+            ].join(','));
+        });
+    });
+    
+    const csvContent = rows.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `session_report_${dateStr}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
-  // Data for Pie Chart
+  const handleExportSession = () => {
+      downloadSessionReport(selectedDate);
+  };
+
+  // Professional Palette
+  const CHART_COLORS = ['#0f766e', '#0d9488', '#14b8a6', '#5eead4', '#99f6e4', '#ccfbf1'];
+  const PIE_COLORS = ['#10b981', '#ef4444', '#cbd5e1']; // Present, Absent, Pending
+
   const pieData = [
-    { name: 'Present', value: reportData.latestStats.present },
-    { name: 'Absent', value: reportData.latestStats.absent },
-    { name: 'Pending', value: reportData.latestStats.unrecorded },
+    { name: 'Present', value: reportData.sessionStats.present },
+    { name: 'Absent', value: reportData.sessionStats.absent },
+    { name: 'Pending', value: reportData.sessionStats.unrecorded },
   ];
 
   return (
     <div className="space-y-8 animate-fade-in pb-12 font-sans">
       {/* 1. Header Section */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 border-b border-slate-200 pb-6 print:mb-8">
-        <div>
-          <h2 className="text-3xl font-bold text-slate-900 tracking-tight">Executive Report</h2>
-          <p className="text-slate-500 mt-1">Performance analytics and attendance insights.</p>
+      <div className="flex flex-col gap-6 border-b border-slate-200 pb-6 print:mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+            <h2 className="text-3xl font-bold text-slate-900 tracking-tight">Executive Report</h2>
+            <p className="text-slate-500 mt-1">Performance analytics and attendance insights.</p>
+            </div>
+            <div className="flex flex-wrap gap-3 print:hidden">
+            <button 
+                onClick={onResetData}
+                className="flex items-center gap-2 px-4 py-2 bg-white text-slate-600 border border-slate-200 rounded-lg text-sm font-semibold hover:bg-slate-50 hover:text-red-600 hover:border-red-100 transition-all"
+            >
+                <RotateCcw className="h-4 w-4" />
+                Reset
+            </button>
+            <button 
+                onClick={() => window.print()} 
+                className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-all"
+            >
+                <Printer className="h-4 w-4" />
+                Print
+            </button>
+            <button 
+                onClick={handleExport}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white border border-slate-900 rounded-lg text-sm font-semibold hover:bg-slate-800 shadow-lg shadow-slate-200 transition-all"
+            >
+                <FileDown className="h-4 w-4" />
+                Export All CSV
+            </button>
+            </div>
         </div>
-        <div className="flex flex-wrap gap-3 print:hidden">
-           <button 
-            onClick={onResetData}
-            className="flex items-center gap-2 px-4 py-2 bg-white text-slate-600 border border-slate-200 rounded-lg text-sm font-semibold hover:bg-slate-50 hover:text-red-600 hover:border-red-100 transition-all"
-          >
-            <RotateCcw className="h-4 w-4" />
-            Reset
-          </button>
-          <button 
-            onClick={() => window.print()} 
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-all"
-          >
-            <Printer className="h-4 w-4" />
-            Print
-          </button>
-          <button 
-            onClick={handleExport}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white border border-slate-900 rounded-lg text-sm font-semibold hover:bg-slate-800 shadow-lg shadow-slate-200 transition-all"
-          >
-            <FileDown className="h-4 w-4" />
-            Export CSV
-          </button>
+
+        {/* Date Filter Bar */}
+        <div className="bg-slate-50 rounded-xl p-4 flex flex-col sm:flex-row items-center gap-4 border border-slate-200 shadow-inner">
+            <div className="flex items-center gap-2 text-slate-500 text-sm font-semibold">
+                <Filter className="h-4 w-4" />
+                <span>Report Period:</span>
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+                <div className="relative flex-1 sm:flex-none">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Calendar className="h-4 w-4 text-slate-400" />
+                    </div>
+                    <input 
+                        type="date" 
+                        value={dateRange.start}
+                        onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+                        className="pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-brand-500 outline-none w-full"
+                    />
+                </div>
+                <span className="text-slate-400 font-medium">to</span>
+                <div className="relative flex-1 sm:flex-none">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <Calendar className="h-4 w-4 text-slate-400" />
+                    </div>
+                    <input 
+                        type="date" 
+                        value={dateRange.end}
+                        onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+                        className="pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-brand-500 outline-none w-full"
+                    />
+                </div>
+            </div>
+            <div className="hidden sm:block h-6 w-px bg-slate-200 mx-2" />
+            <div className="text-xs text-slate-500 font-medium ml-auto">
+                Showing data for <span className="text-slate-900 font-bold">{filteredDates.length}</span> sessions
+            </div>
         </div>
       </div>
 
@@ -198,7 +393,7 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
         <KPICard 
             title="Overall Efficiency" 
             value={`${reportData.overallRate}%`} 
-            subtext="Avg. Attendance Rate"
+            subtext="Avg. Attendance Rate (Selected Period)"
             icon={Activity}
             trend={reportData.overallRate > 75 ? 'up' : 'down'}
         />
@@ -224,8 +419,57 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
         />
       </div>
 
-      {/* 3. Group Performance Chart */}
+      {/* 3. Trends Chart (New) */}
+      <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+        <div className="flex items-center justify-between mb-6">
+            <div>
+                <h3 className="text-lg font-bold text-slate-900">Attendance Trends</h3>
+                <p className="text-xs text-slate-500">Participation rate over selected period</p>
+            </div>
+            <TrendingUp className="h-5 w-5 text-slate-400" />
+        </div>
+        <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={reportData.trendData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                    <defs>
+                        <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#0f766e" stopOpacity={0.1}/>
+                            <stop offset="95%" stopColor="#0f766e" stopOpacity={0}/>
+                        </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis 
+                        dataKey="formattedDate" 
+                        stroke="#94a3b8" 
+                        fontSize={12} 
+                        tickLine={false} 
+                        axisLine={false}
+                    />
+                    <YAxis 
+                        stroke="#94a3b8" 
+                        fontSize={12} 
+                        tickLine={false} 
+                        axisLine={false}
+                        unit="%"
+                    />
+                    <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#cbd5e1', strokeWidth: 1 }} />
+                    <Area 
+                        type="monotone" 
+                        dataKey="rate" 
+                        name="Attendance Rate"
+                        stroke="#0f766e" 
+                        strokeWidth={2}
+                        fillOpacity={1} 
+                        fill="url(#colorRate)" 
+                        activeDot={{ r: 6, strokeWidth: 0 }}
+                    />
+                </AreaChart>
+            </ResponsiveContainer>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* 4. Group Performance Chart */}
           <div className="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
              <div className="flex items-center justify-between mb-6">
                 <div>
@@ -252,10 +496,16 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                             content={({ active, payload }) => {
                                 if (active && payload && payload.length) {
                                 return (
-                                    <div className="bg-slate-900 text-white text-xs p-2 rounded shadow-xl">
-                                        <p className="font-bold">{payload[0].payload.name}</p>
-                                        <p>{payload[0].value}% Attendance</p>
-                                        <p className="opacity-70">{payload[0].payload.memberCount} Members</p>
+                                    <div className="bg-slate-900 text-white text-xs p-3 rounded-lg shadow-xl">
+                                        <p className="font-bold mb-1">{payload[0].payload.name}</p>
+                                        <div className="flex justify-between gap-4">
+                                            <span>Efficiency:</span>
+                                            <span className="font-bold">{payload[0].value}%</span>
+                                        </div>
+                                        <div className="flex justify-between gap-4 opacity-80">
+                                            <span>Members:</span>
+                                            <span>{payload[0].payload.memberCount}</span>
+                                        </div>
                                     </div>
                                 );
                                 }
@@ -272,17 +522,30 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
              </div>
           </div>
 
-          {/* 4. Latest Session Stats */}
+          {/* 5. Session Stats (Interactive) */}
           <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col">
               <div className="mb-4">
-                   <h3 className="text-lg font-bold text-slate-900">Latest Session</h3>
-                   <p className="text-xs text-slate-500 flex items-center gap-1">
-                      <Calendar className="h-3 w-3" />
-                      {lastDate ? new Date(lastDate).toLocaleDateString() : 'No Data'}
-                   </p>
+                   <h3 className="text-lg font-bold text-slate-900">Session Breakdown</h3>
+                   <p className="text-xs text-slate-500 mb-3">Select date from range to view specific report</p>
+                   
+                   {/* Date Selector */}
+                   <div className="relative">
+                        <CalendarDays className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                        <select 
+                            value={selectedDate}
+                            onChange={(e) => setSelectedDate(e.target.value)}
+                            className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-brand-500 focus:outline-none appearance-none cursor-pointer hover:bg-slate-100 transition-colors"
+                        >
+                            {filteredDates.slice().reverse().map(d => (
+                                <option key={d} value={d}>
+                                    {new Date(d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                                </option>
+                            ))}
+                        </select>
+                   </div>
               </div>
 
-              {/* Latest Session Pie Chart */}
+              {/* Session Pie Chart */}
               <div className="h-40 w-full mb-4">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
@@ -296,7 +559,7 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                             dataKey="value"
                         >
                             {pieData.map((entry, index) => (
-                                <Cell key={`cell-${index}`} fill={PIE_COLORS[index]} />
+                                <Cell key={`cell-${index}`} fill={PIE_COLORS[index]} strokeWidth={0} />
                             ))}
                         </Pie>
                         <Tooltip />
@@ -305,41 +568,37 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
               </div>
               
               <div className="flex-1 flex flex-col justify-center space-y-3">
-                 {/* Present */}
                  <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg border border-green-100">
                      <div className="flex items-center gap-3">
                          <div className="p-1.5 bg-green-200 rounded-full text-green-700"><Check className="h-4 w-4" /></div>
                          <p className="text-xs font-bold text-green-800 uppercase tracking-wide">Present</p>
                      </div>
-                     <p className="text-xl font-bold text-slate-900">{reportData.latestStats.present}</p>
+                     <p className="text-xl font-bold text-slate-900">{reportData.sessionStats.present}</p>
                  </div>
 
-                 {/* Absent */}
                  <div className="flex items-center justify-between p-3 bg-red-50 rounded-lg border border-red-100">
                      <div className="flex items-center gap-3">
                          <div className="p-1.5 bg-red-200 rounded-full text-red-700"><X className="h-4 w-4" /></div>
                          <p className="text-xs font-bold text-red-800 uppercase tracking-wide">Absent</p>
                      </div>
-                     <p className="text-xl font-bold text-slate-900">{reportData.latestStats.absent}</p>
+                     <p className="text-xl font-bold text-slate-900">{reportData.sessionStats.absent}</p>
                  </div>
 
-                 {/* Unrecorded */}
-                 {reportData.latestStats.unrecorded > 0 && (
+                 {reportData.sessionStats.unrecorded > 0 && (
                     <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
                         <div className="flex items-center gap-3">
                             <div className="p-1.5 bg-slate-200 rounded-full text-slate-600"><Minus className="h-4 w-4" /></div>
                             <p className="text-xs font-bold text-slate-600 uppercase tracking-wide">Pending</p>
                         </div>
-                         <p className="text-xl font-bold text-slate-900">{reportData.latestStats.unrecorded}</p>
+                         <p className="text-xl font-bold text-slate-900">{reportData.sessionStats.unrecorded}</p>
                     </div>
                  )}
               </div>
           </div>
       </div>
 
-      {/* 5. Member Insights (Split View) */}
+      {/* 6. Member Insights (Split View) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Consistency Leaders */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
                   <h3 className="font-bold text-slate-900 flex items-center gap-2">
@@ -363,9 +622,12 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                                   <p className="text-xs text-slate-500">{m.group}</p>
                               </div>
                           </div>
-                          <div className="text-right">
+                          <div className="text-right flex flex-col items-end">
                               <span className="inline-block px-2 py-0.5 bg-green-100 text-green-700 text-xs font-bold rounded-full">
                                   {m.rate}%
+                              </span>
+                              <span className="text-[10px] text-slate-400 mt-1 font-medium">
+                                {m.presentSessions}/{m.totalSessions} attended
                               </span>
                           </div>
                       </div>
@@ -374,7 +636,6 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
               </div>
           </div>
 
-          {/* Retention Alert */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
               <div className="p-5 border-b border-slate-100 bg-red-50/50 flex items-center justify-between">
                   <h3 className="font-bold text-red-900 flex items-center gap-2">
@@ -412,7 +673,78 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
           </div>
       </div>
 
-      {/* 6. Latest Session Breakdown by Group */}
+       {/* 7. New Section: Recent Session History (Last 10) */}
+       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="p-5 border-b border-slate-100 bg-teal-50/50 flex items-center gap-3">
+              <div className="bg-teal-100 p-2 rounded-lg text-teal-700">
+                  <FileText className="h-5 w-5" />
+              </div>
+              <div>
+                  <h3 className="text-lg font-bold text-slate-900">Session Reports</h3>
+                  <p className="text-xs text-slate-500">Breakdown of sessions within selected period</p>
+              </div>
+          </div>
+          <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+              <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-slate-500 uppercase text-[10px] font-bold tracking-wider sticky top-0 z-10">
+                      <tr>
+                          <th className="px-6 py-4 bg-slate-50">Date</th>
+                          <th className="px-6 py-4 text-center bg-slate-50">Status</th>
+                          <th className="px-6 py-4 text-center bg-slate-50">Attendance</th>
+                          <th className="px-6 py-4 text-center bg-slate-50">Rate</th>
+                          <th className="px-6 py-4 bg-slate-50">Leading Group</th>
+                          <th className="px-6 py-4 text-right bg-slate-50">Action</th>
+                      </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                      {reportData.sessionHistory.map((session, i) => (
+                          <tr key={i} className="hover:bg-slate-50 transition-colors">
+                              <td className="px-6 py-4 font-bold text-slate-900 whitespace-nowrap">
+                                  {new Date(session.date).toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}
+                              </td>
+                              <td className="px-6 py-4 text-center">
+                                  <span className={clsx(
+                                      "inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase",
+                                      session.rate >= 80 ? "bg-green-100 text-green-800" : 
+                                      session.rate >= 60 ? "bg-blue-100 text-blue-800" : 
+                                      "bg-orange-100 text-orange-800"
+                                  )}>
+                                      {session.rate >= 80 ? 'High' : session.rate >= 60 ? 'Avg' : 'Low'}
+                                  </span>
+                              </td>
+                              <td className="px-6 py-4 text-center text-slate-600">
+                                  <span className="font-bold text-slate-900">{session.present}</span>
+                                  <span className="text-xs text-slate-400 mx-1">/</span>
+                                  <span className="text-xs">{session.present + session.absent}</span>
+                              </td>
+                              <td className="px-6 py-4 text-center">
+                                  <span className={clsx("font-bold", session.rate >= 80 ? "text-green-600" : "text-slate-600")}>
+                                      {session.rate}%
+                                  </span>
+                              </td>
+                              <td className="px-6 py-4 text-slate-600 text-xs">
+                                  {session.topGroup}
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                  <button 
+                                      onClick={() => downloadSessionReport(session.date)}
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 shadow-sm rounded-lg text-xs font-bold text-slate-600 hover:bg-slate-50 hover:text-brand-600 transition-colors"
+                                  >
+                                      <Download className="h-3.5 w-3.5" />
+                                      Download
+                                  </button>
+                              </td>
+                          </tr>
+                      ))}
+                      {reportData.sessionHistory.length === 0 && (
+                          <tr><td colSpan={6} className="p-8 text-center text-slate-400">No session history available for this period.</td></tr>
+                      )}
+                  </tbody>
+              </table>
+          </div>
+       </div>
+
+      {/* 8. Detailed Session Report Table (Specific Date Breakdown) */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="p-5 border-b border-slate-100 bg-indigo-50/50 flex justify-between items-center">
                <div className="flex items-center gap-3">
@@ -420,12 +752,20 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                         <PieChartIcon className="h-5 w-5" />
                    </div>
                    <div>
-                        <h3 className="text-lg font-bold text-slate-900">Latest Session Detail</h3>
+                        <h3 className="text-lg font-bold text-slate-900">Session Breakdown Detail</h3>
                         <p className="text-xs text-slate-500">
-                            Breakdown for {lastDate ? new Date(lastDate).toLocaleDateString() : 'N/A'}
+                            {selectedDate ? new Date(selectedDate).toLocaleDateString() : 'Select a date from list'}
                         </p>
                    </div>
                </div>
+               <button 
+                  onClick={handleExportSession}
+                  disabled={!selectedDate}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-white text-indigo-600 border border-indigo-200 rounded-lg text-xs font-bold hover:bg-indigo-50 transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+               >
+                   <Download className="h-3.5 w-3.5" />
+                   Export Report
+               </button>
           </div>
           <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
@@ -435,11 +775,11 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                           <th className="px-6 py-4 text-center">Present</th>
                           <th className="px-6 py-4 text-center">Absent</th>
                           <th className="px-6 py-4 text-center">Unrecorded</th>
-                          <th className="px-6 py-4 text-right">Data Submitted</th>
+                          <th className="px-6 py-4 text-right">Completion</th>
                       </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                      {reportData.groupLatestStats.map((g) => {
+                      {reportData.groupSessionStats.map((g) => {
                          const total = g.present + g.absent + g.unrecorded;
                          const completion = total > 0 ? ((g.present + g.absent) / total) * 100 : 0;
                          return (
@@ -461,11 +801,11 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
           </div>
       </div>
 
-      {/* 7. Detailed Data Table (Overall) */}
+      {/* 9. Overall Performance Matrix */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="p-5 border-b border-slate-100 bg-slate-50/50">
               <h3 className="text-lg font-bold text-slate-900">Overall Performance Matrix</h3>
-              <p className="text-xs text-slate-500">Historical average by group</p>
+              <p className="text-xs text-slate-500">Historical average by group (Selected Period)</p>
           </div>
           <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
@@ -499,7 +839,7 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                                   {g.memberCount}
                               </td>
                               <td className="px-6 py-4 text-center text-slate-600">
-                                  {Math.round(g.rawPresent / dates.length)}
+                                  {Math.round(g.rawPresent / Math.max(1, filteredDates.length))}
                               </td>
                               <td className="px-6 py-4 text-right">
                                   {g.attendance >= 80 ? (
