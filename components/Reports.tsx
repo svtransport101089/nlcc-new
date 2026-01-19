@@ -35,16 +35,37 @@ const KPICard = ({ title, value, subtext, icon: Icon, trend }: any) => (
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
+    const data = payload[0].payload; // For ScatterChart, payload[0] contains the data point
+    const value = payload[0].value;
+    const name = payload[0].name;
+
+    let quadrantStatus = '';
+    if (payload[0].dataKey === 'attendance') { // For scatter chart groups
+        const avgGroupSize = payload[0].owner.props.children.find((child:any) => child.props.x !== undefined)?.props.x;
+        const avgEngagementRate = payload[0].owner.props.children.find((child:any) => child.props.y !== undefined)?.props.y;
+        
+        if (data.memberCount >= avgGroupSize && data.attendance >= avgEngagementRate) {
+            quadrantStatus = 'High-Impact Group';
+        } else if (data.memberCount < avgGroupSize && data.attendance >= avgEngagementRate) {
+            quadrantStatus = 'Growth Potential';
+        } else if (data.memberCount >= avgGroupSize && data.attendance < avgEngagementRate) {
+            quadrantStatus = 'Priority Attention';
+        } else {
+            quadrantStatus = 'Developing';
+        }
+    }
+
     return (
       <div className="bg-white p-4 border-none shadow-2xl rounded-2xl text-xs min-w-[140px]">
-        <p className="font-black text-slate-900 mb-2 border-b border-slate-100 pb-1">{label}</p>
+        <p className="font-black text-slate-900 mb-2 border-b border-slate-100 pb-1">{data.name || label}</p>
+        {quadrantStatus && <p className="text-brand-600 font-bold mb-2">{quadrantStatus}</p>}
         {payload.map((entry: any, index: number) => (
           <div key={index} className="flex items-center justify-between gap-4 mb-1">
             <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color }} />
                 <span className="text-slate-500 font-bold capitalize">{entry.name}:</span>
             </div>
-            <span className="font-black text-slate-900">{entry.value}</span>
+            <span className="font-black text-slate-900">{entry.value}{entry.unit}</span>
           </div>
         ))}
       </div>
@@ -54,22 +75,25 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
-  const dates = useMemo(() => getAllDates(groups), [groups]);
+  const dates = useMemo(() => getAllDates(groups), [groups]); // Now guaranteed to be Sunday dates
   const [selectedDate, setSelectedDate] = useState<string>('');
   
   const [dateRange, setDateRange] = useState<{start: string, end: string}>({ start: '', end: '' });
 
+  // Initialize date range to cover all available Sundays
   useEffect(() => {
       if (dates.length > 0 && (!dateRange.start || !dateRange.end)) {
           setDateRange({ start: dates[0], end: dates[dates.length - 1] });
       }
   }, [dates]);
 
+  // Filter dates to only include Sundays within the selected range
   const filteredDates = useMemo(() => {
       if (!dateRange.start || !dateRange.end) return [];
       return dates.filter(d => d >= dateRange.start && d <= dateRange.end);
   }, [dates, dateRange]);
 
+  // Sync selectedDate with the latest filtered Sunday
   useEffect(() => {
     if (filteredDates.length > 0) {
         if (!selectedDate || !filteredDates.includes(selectedDate)) {
@@ -89,10 +113,11 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
             totalMembers: groups.reduce((acc, g) => acc + g.members.length, 0),
             overallRate: 0,
             bestGroup: null,
-            sessionStats: { present: 0, absent: 0, unrecorded: 0 },
-            groupSessionStats: [],
+            sundayServiceStats: { present: 0, absent: 0, unrecorded: 0 }, // Renamed
+            groupSundayStats: [], // Renamed
             trendData: [],
-            sessionHistory: []
+            sundayHistory: [], // Renamed
+            overallSummary: { totalPresent: 0, totalAbsent: 0, overallRate: 0 }
         };
     }
 
@@ -100,9 +125,10 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
     const secondLastDate = filteredDates.length > 1 ? filteredDates[filteredDates.length - 2] : null;
     const targetDate = selectedDate || lastDate;
 
+    // Group Metrics (Overall Sunday Engagement within Range)
     const groupMetrics = groups.map(g => {
       let present = 0;
-      let total = 0;
+      let total = 0; // Opportunities for a group in the filtered dates
       g.members.forEach(m => {
         filteredDates.forEach(date => {
             const status = m.attendance[date];
@@ -113,17 +139,18 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
       const avg = total > 0 ? (present / total) * 100 : 0;
       return {
         name: g.leaderName,
-        attendance: Math.round(avg),
+        attendance: Math.round(avg), // This is the Sunday Attendance Rate
         memberCount: g.members.length,
         rawPresent: present,
         rawTotal: total
       };
     }).sort((a, b) => b.attendance - a.attendance);
 
+    // Member Leaderboard (Sunday Faithfulness within Range)
     const memberLeaderboard = groups.flatMap(g => 
       g.members.map(m => {
         let present = 0;
-        let total = 0;
+        let total = 0; // Opportunities for a member in the filtered dates
         filteredDates.forEach(date => {
             const status = m.attendance[date];
             if (status === 'P') present++;
@@ -135,19 +162,20 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
           name: m.name,
           group: g.leaderName,
           rate: Math.round(rate),
-          totalSessions: total,
-          presentSessions: present
+          totalSundays: total, // Renamed
+          presentSundays: present // Renamed
         };
       })
-    ).filter(m => m.totalSessions >= 1)
-     .sort((a, b) => b.rate - a.rate || b.totalSessions - a.totalSessions)
+    ).filter(m => m.totalSundays >= 1)
+     .sort((a, b) => b.rate - a.rate || b.totalSundays - a.totalSundays)
      .slice(0, 5);
 
+    // At Risk Members (Based on consecutive Sunday Absences)
     const atRiskMembers = secondLastDate ? groups.flatMap(g => 
       g.members.filter(m => {
         const lastStatus = m.attendance[lastDate];
         const prevStatus = m.attendance[secondLastDate];
-        return lastStatus === 'A' && prevStatus === 'A';
+        return lastStatus === 'A' && prevStatus === 'A'; // Missed last two Sundays
       }).map(m => ({
         name: m.name,
         group: g.leaderName,
@@ -156,12 +184,27 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
       }))
     ).slice(0, 10) : [];
 
+    // Global Stats (Sunday Averages within Range)
     const totalMembers = groups.reduce((acc, g) => acc + g.members.length, 0);
-    const overallRate = Math.round(groupMetrics.reduce((acc, m) => acc + m.attendance, 0) / (groupMetrics.length || 1));
+    // Overall rate needs to be calculated from total opportunities across all groups/members for filtered dates
+    let overallTotalPresent = 0;
+    let overallTotalOpportunities = 0;
+    groups.forEach(g => {
+        g.members.forEach(m => {
+            filteredDates.forEach(date => {
+                const status = m.attendance[date];
+                if (status === 'P') overallTotalPresent++;
+                if (status === 'P' || status === 'A') overallTotalOpportunities++;
+            });
+        });
+    });
+    const overallRate = overallTotalOpportunities > 0 ? Math.round((overallTotalPresent / overallTotalOpportunities) * 100) : 0;
+
     const bestGroup = groupMetrics[0];
 
-    const sessionStats = { present: 0, absent: 0, unrecorded: 0 };
-    const groupSessionStats = groups.map(g => {
+    // Selected Sunday Service Breakdown
+    const sundayServiceStats = { present: 0, absent: 0, unrecorded: 0 }; // Renamed
+    const groupSundayStats = groups.map(g => { // Renamed
         let present = 0;
         let absent = 0;
         let unrecorded = 0;
@@ -172,9 +215,9 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
              else unrecorded++;
         });
         
-        sessionStats.present += present;
-        sessionStats.absent += absent;
-        sessionStats.unrecorded += unrecorded;
+        sundayServiceStats.present += present;
+        sundayServiceStats.absent += absent;
+        sundayServiceStats.unrecorded += unrecorded;
 
         return {
             id: g.id,
@@ -185,6 +228,7 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
         };
     }).sort((a, b) => b.present - a.present);
 
+    // Trends Data (Sunday-by-Sunday within Range)
     const trendData = filteredDates.map(d => {
         let p = 0;
         let t = 0;
@@ -202,10 +246,11 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
         };
     });
 
-    const sessionHistory = filteredDates.slice().reverse().map(date => {
+    // Sunday History Report (All Sundays in Range)
+    const sundayHistory = filteredDates.slice().reverse().map(date => { // Renamed
         let present = 0;
         let absent = 0;
-        let total = 0;
+        let totalRecorded = 0; // Only count P or A for total
         let topG = { name: '-', count: -1 };
 
         groups.forEach(g => {
@@ -214,7 +259,7 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                 const s = m.attendance[date];
                 if (s === 'P') { present++; gPresent++; }
                 if (s === 'A') absent++;
-                if (s === 'P' || s === 'A') total++;
+                if (s === 'P' || s === 'A') totalRecorded++;
             });
             if (gPresent > topG.count) {
                 topG = { name: g.leaderName, count: gPresent };
@@ -225,10 +270,21 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
             date,
             present,
             absent,
-            rate: total > 0 ? Math.round((present / total) * 100) : 0,
-            topGroup: topG.name
+            rate: totalRecorded > 0 ? Math.round((present / totalRecorded) * 100) : 0,
+            topGroup: topG.name,
+            totalRecorded
         };
     });
+
+    // Overall Summary for Historical Sunday Performance
+    const overallSummary = sundayHistory.reduce((acc, current) => {
+        acc.totalPresent += current.present;
+        acc.totalAbsent += current.absent;
+        acc.totalRecorded += current.totalRecorded;
+        return acc;
+    }, { totalPresent: 0, totalAbsent: 0, totalRecorded: 0 });
+    overallSummary.overallRate = overallSummary.totalRecorded > 0 ? Math.round((overallSummary.totalPresent / overallSummary.totalRecorded) * 100) : 0;
+
 
     return { 
         groupMetrics, 
@@ -237,10 +293,11 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
         totalMembers, 
         overallRate, 
         bestGroup,
-        sessionStats,
-        groupSessionStats,
+        sundayServiceStats, // Renamed
+        groupSundayStats, // Renamed
         trendData,
-        sessionHistory
+        sundayHistory, // Renamed
+        overallSummary
     };
   }, [groups, filteredDates, selectedDate]);
 
@@ -259,7 +316,7 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
 
   const downloadSessionReport = (dateStr: string) => {
     if (!dateStr) return;
-    const headers = ['Group', 'Member Name', 'Phone', 'Status', 'Date'];
+    const headers = ['Group', 'Member Name', 'Phone', 'Status', 'Service Date'];
     const rows = [headers.join(',')];
     groups.forEach(g => {
         g.members.forEach(m => {
@@ -284,9 +341,9 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
   const PIE_COLORS = ['#10b981', '#ef4444', '#cbd5e1']; 
 
   const pieData = [
-    { name: 'Present', value: reportData.sessionStats.present },
-    { name: 'Absent', value: reportData.sessionStats.absent },
-    { name: 'Unrecorded', value: reportData.sessionStats.unrecorded },
+    { name: 'Present', value: reportData.sundayServiceStats.present, color: PIE_COLORS[0] },
+    { name: 'Absent', value: reportData.sundayServiceStats.absent, color: PIE_COLORS[1] },
+    { name: 'Unrecorded', value: reportData.sundayServiceStats.unrecorded, color: PIE_COLORS[2] },
   ];
   
   const avgGroupSize = Math.round(reportData.totalMembers / Math.max(1, groups.length));
@@ -312,7 +369,7 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
         <div className="bg-white rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-4 border border-slate-200 shadow-sm">
             <div className="flex items-center gap-3 text-slate-500 text-xs font-black uppercase tracking-widest">
                 <Filter className="h-4 w-4 text-brand-600" />
-                <span>Range Filter:</span>
+                <span>Report Period:</span>
             </div>
             <div className="flex items-center gap-3 w-full sm:w-auto">
                 <input type="date" value={dateRange.start} onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))} className="px-3 py-2 border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-brand-500 outline-none w-full sm:w-auto" />
@@ -335,12 +392,12 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Sunday Performance Matrix */}
+          {/* Sunday Engagement Matrix */}
           <div className="lg:col-span-2 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
              <div className="flex items-center justify-between mb-8">
                 <div>
                     <h3 className="text-xl font-black text-slate-900">Sunday Engagement Matrix</h3>
-                    <p className="text-sm text-slate-500 font-medium">Correlation between Group Scale and Attendance Efficiency</p>
+                    <p className="text-sm text-slate-500 font-medium">Correlation between Group Scale and Sunday Attendance Efficiency</p>
                 </div>
                 <div className="p-3 bg-slate-50 rounded-2xl"><LayoutGrid className="h-6 w-6 text-brand-600" /></div>
              </div>
@@ -348,8 +405,8 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                 <ResponsiveContainer width="100%" height="100%">
                     <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                        <XAxis type="number" dataKey="memberCount" name="Group Size" unit=" members" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
-                        <YAxis type="number" dataKey="attendance" name="Sunday Rate" unit="%" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} domain={[0, 100]} />
+                        <XAxis type="number" dataKey="memberCount" name="Congregation Size" unit=" members" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} />
+                        <YAxis type="number" dataKey="attendance" name="Sunday Engagement Rate" unit="%" stroke="#94a3b8" fontSize={11} tickLine={false} axisLine={false} domain={[0, 100]} />
                         <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<CustomTooltip />} />
                         <ReferenceLine x={avgGroupSize} stroke="#cbd5e1" strokeDasharray="5 5" label={{ value: 'Avg Size', position: 'insideTopRight', fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
                         <ReferenceLine y={reportData.overallRate} stroke="#cbd5e1" strokeDasharray="5 5" label={{ value: 'Avg Engagement', position: 'insideRight', fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }} />
@@ -382,7 +439,7 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                         <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={70} paddingAngle={4} dataKey="value">
-                            {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={PIE_COLORS[index]} strokeWidth={0} />)}
+                            {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} strokeWidth={0} />)}
                         </Pie>
                         <Tooltip />
                     </PieChart>
@@ -392,12 +449,18 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
               <div className="space-y-3">
                  <div className="flex items-center justify-between p-4 bg-teal-50 rounded-2xl border border-teal-100">
                      <span className="text-xs font-black text-teal-800 uppercase tracking-widest">Present</span>
-                     <p className="text-2xl font-black text-teal-900">{reportData.sessionStats.present}</p>
+                     <p className="text-2xl font-black text-teal-900">{reportData.sundayServiceStats.present}</p>
                  </div>
                  <div className="flex items-center justify-between p-4 bg-red-50 rounded-2xl border border-red-100">
                      <span className="text-xs font-black text-red-800 uppercase tracking-widest">Absent</span>
-                     <p className="text-2xl font-black text-red-900">{reportData.sessionStats.absent}</p>
+                     <p className="text-2xl font-black text-red-900">{reportData.sundayServiceStats.absent}</p>
                  </div>
+                 {reportData.sundayServiceStats.unrecorded > 0 && (
+                     <div className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                         <span className="text-xs font-black text-slate-600 uppercase tracking-widest">Unrecorded</span>
+                         <p className="text-2xl font-black text-slate-900">{reportData.sundayServiceStats.unrecorded}</p>
+                     </div>
+                 )}
               </div>
           </div>
       </div>
@@ -421,6 +484,7 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                           </div>
                       </div>
                   ))}
+                  {reportData.memberLeaderboard.length === 0 && <p className="p-6 text-center text-sm text-slate-400 font-medium">No top performers identified for this period.</p>}
               </div>
           </div>
 
@@ -463,7 +527,7 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                       </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                      {reportData.sessionHistory.map((session, i) => (
+                      {reportData.sundayHistory.map((session, i) => (
                           <tr key={i} className="hover:bg-slate-50 transition-colors">
                               <td className="px-8 py-5 font-black text-slate-900">Sunday, {new Date(session.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</td>
                               <td className="px-8 py-5 text-center">
@@ -471,7 +535,7 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                                       {session.rate >= 80 ? 'Optimal' : session.rate >= 60 ? 'Stable' : 'Critical'}
                                   </span>
                               </td>
-                              <td className="px-8 py-5 text-center text-slate-900 font-bold">{session.present} <span className="text-slate-300 mx-1">/</span> <span className="text-slate-500 text-xs font-medium">{session.present + session.absent}</span></td>
+                              <td className="px-8 py-5 text-center text-slate-900 font-bold">{session.present} <span className="text-slate-300 mx-1">/</span> <span className="text-slate-500 text-xs font-medium">{session.totalRecorded}</span></td>
                               <td className="px-8 py-5 text-center font-black text-slate-700">{session.rate}%</td>
                               <td className="px-8 py-5 text-slate-500 font-medium text-xs">{session.topGroup}</td>
                               <td className="px-8 py-5 text-right">
@@ -479,7 +543,26 @@ const Reports: React.FC<ReportsProps> = ({ groups, onResetData }) => {
                               </td>
                           </tr>
                       ))}
+                      {reportData.sundayHistory.length === 0 && (
+                          <tr><td colSpan={6} className="p-8 text-center text-slate-400 font-medium">No Sunday service history available for this period.</td></tr>
+                      )}
                   </tbody>
+                  {reportData.sundayHistory.length > 0 && (
+                    <tfoot className="bg-slate-50 border-t border-slate-200">
+                        <tr>
+                            <td className="px-8 py-4 font-black text-slate-900 uppercase">Overall Summary</td>
+                            <td className="px-8 py-4 text-center">
+                                <span className={clsx("px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-widest", reportData.overallSummary.overallRate >= 80 ? "bg-green-100 text-green-800" : reportData.overallSummary.overallRate >= 60 ? "bg-blue-100 text-blue-800" : "bg-orange-100 text-orange-800")}>
+                                    {reportData.overallSummary.overallRate >= 80 ? 'Optimal' : reportData.overallSummary.overallRate >= 60 ? 'Stable' : 'Critical'}
+                                </span>
+                            </td>
+                            <td className="px-8 py-4 text-center text-slate-900 font-black">{reportData.overallSummary.totalPresent} <span className="text-slate-300 mx-1">/</span> <span className="text-slate-500 text-xs font-medium">{reportData.overallSummary.totalRecorded}</span></td>
+                            <td className="px-8 py-4 text-center font-black text-slate-700">{reportData.overallSummary.overallRate}%</td>
+                            <td className="px-8 py-4 text-slate-500 font-medium text-xs">-</td>
+                            <td className="px-8 py-4 text-right"></td>
+                        </tr>
+                    </tfoot>
+                  )}
               </table>
           </div>
        </div>

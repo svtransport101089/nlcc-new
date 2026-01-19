@@ -88,13 +88,17 @@ export const parseData = (): Group[] => {
 export const calculateStats = (groups: Group[]): DashboardStats => {
   let totalMembers = 0;
   let totalPresent = 0;
-  let totalOpportunities = 0;
+  let totalOpportunities = 0; // Opportunities means recorded P or A
   const dateStatsMap = new Map<string, { present: number; absent: number }>();
+
+  // Use getAllDates to ensure only Sunday dates are processed
+  const sundayDates = getAllDates(groups);
 
   groups.forEach(group => {
     group.members.forEach(member => {
       totalMembers++;
-      Object.entries(member.attendance).forEach(([date, status]) => {
+      sundayDates.forEach(date => { // Iterate only over Sunday dates
+        const status = member.attendance[date]; // Get status for that specific Sunday
         if (!dateStatsMap.has(date)) {
           dateStatsMap.set(date, { present: 0, absent: 0 });
         }
@@ -131,14 +135,30 @@ export const calculateStats = (groups: Group[]): DashboardStats => {
 
 export const getAllDates = (groups: Group[]): string[] => {
     if (groups.length === 0) return [];
-    // Assuming all members have same date keys structure derived from CSV header
-    return Object.keys(groups[0].members[0]?.attendance || {}).sort();
+    
+    const allUniqueDates = new Set<string>();
+    // Collect all dates from all members across all groups
+    groups.forEach(group => {
+        group.members.forEach(member => {
+            Object.keys(member.attendance).forEach(date => allUniqueDates.add(date));
+        });
+    });
+
+    const sortedDates = Array.from(allUniqueDates).sort();
+
+    // Filter to include only Sundays
+    const sundayDates = sortedDates.filter(dateString => {
+        const date = new Date(dateString);
+        return date.getDay() === 0; // 0 for Sunday
+    });
+
+    return sundayDates;
 }
 
 export const exportToCSV = (groups: Group[]): string => {
   if (groups.length === 0) return '';
 
-  const dates = getAllDates(groups);
+  const dates = getAllDates(groups); // Use the Sunday-filtered dates
   
   // Headers
   const headers = [
