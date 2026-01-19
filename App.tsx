@@ -102,8 +102,10 @@ const App: React.FC = () => {
         attendance: {}
       };
       // Initialize attendance for existing dates
-      const existingDates = Object.keys(group.members[0]?.attendance || {});
-      existingDates.forEach(d => newMember.attendance[d] = '');
+      // Find global dates to ensure consistency
+      const allDates = new Set<string>();
+      prevGroups.forEach(g => g.members.forEach(m => Object.keys(m.attendance).forEach(d => allDates.add(d))));
+      Array.from(allDates).forEach(d => newMember.attendance[d] = '');
       
       return { ...group, members: [newMember, ...group.members] };
     }));
@@ -211,11 +213,14 @@ const App: React.FC = () => {
 
       {activeTab === 'members' && (
         <MembersList 
-            groups={filteredGroups} 
+            groups={groups} // Pass all groups to allow adding to any group
             searchQuery={globalSearch}
             monthRanges={monthRanges}
             selectedMonthRange={selectedMonthRange}
             onSelectMonthRange={setSelectedMonthRange}
+            onAddMember={handleAddMember}
+            onUpdateMember={handleUpdateMember}
+            onDeleteMember={handleDeleteMember}
         />
       )}
 
