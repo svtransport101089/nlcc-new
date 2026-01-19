@@ -37,6 +37,23 @@
           -ms-overflow-style: none;  /* IE and Edge */
           scrollbar-width: none;  /* Firefox */
       }
+
+      @media print {
+        body {
+          background-color: white !important;
+        }
+        main {
+          padding: 0 !important;
+          margin: 0 !important;
+        }
+        .animate-fade-in {
+          animation: none !important;
+        }
+        /* Ensure charts visible in print */
+        canvas {
+          max-width: 100% !important;
+        }
+      }
     </style>
   <script type="importmap">
 {

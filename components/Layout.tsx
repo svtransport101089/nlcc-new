@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Menu, X, Users, BarChart2, Home, UserCheck, Search } from 'lucide-react';
+import { Menu, X, Users, BarChart2, Home, UserCheck, Search, FileChartColumn } from 'lucide-react';
 import clsx from 'clsx';
 
 interface LayoutProps {
@@ -23,12 +23,13 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, onSea
     { id: 'dashboard', label: 'Dashboard', icon: BarChart2 },
     { id: 'groups', label: 'Groups', icon: Users },
     { id: 'members', label: 'Members', icon: UserCheck },
+    { id: 'reports', label: 'Reports', icon: FileChartColumn },
   ];
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 print:hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center">
             {/* Logo */}
@@ -90,7 +91,6 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, onSea
         {isMobileMenuOpen && (
           <div className="md:hidden border-t border-slate-200 bg-white">
             <div className="px-2 pt-2 pb-3 space-y-1">
-              {/* Mobile Search */}
               <div className="px-3 pb-2 sm:hidden">
                  <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -130,7 +130,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange, onSea
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 print:p-0 print:max-w-none">
         {children}
       </main>
     </div>

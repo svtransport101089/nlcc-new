@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Group, AttendanceStatus, Member } from '../types';
-import { ArrowLeft, Phone, Search, Check, X, Minus, CheckCircle, XCircle, Trash2, UserPlus, Plus, History, Calendar, User, ArrowUpDown, ArrowDown, ArrowUp } from 'lucide-react';
+import { ArrowLeft, Phone, Search, Check, X, Minus, CheckCircle, XCircle, Trash2, UserPlus, Plus, History, Calendar, User, ArrowDown, Edit2, Settings, Zap, ChevronLeft, ChevronRight, CalendarPlus } from 'lucide-react';
 import clsx from 'clsx';
 import { getAllDates } from '../services/dataProcessor';
 
@@ -10,27 +10,39 @@ interface GroupDetailProps {
   allGroups: Group[];
   onBulkUpdate: (groupId: string, date: string, status: AttendanceStatus) => void;
   onAddMember: (groupId: string, name: string, phone: string) => void;
+  onUpdateMember: (groupId: string, memberId: string, name: string, phone: string) => void;
+  onDeleteMember: (groupId: string, memberId: string) => void;
+  onAddSession: (date: string) => void;
+  onMarkAttendance: (groupId: string, memberId: string, date: string, status: AttendanceStatus) => void;
 }
 
-const GroupDetail: React.FC<GroupDetailProps> = ({ group, onBack, allGroups, onBulkUpdate, onAddMember }) => {
+const GroupDetail: React.FC<GroupDetailProps> = ({ 
+    group, 
+    onBack, 
+    allGroups, 
+    onBulkUpdate, 
+    onAddMember,
+    onUpdateMember,
+    onDeleteMember,
+    onAddSession,
+    onMarkAttendance
+}) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [actionDate, setActionDate] = useState<string | null>(null);
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
+  const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [viewMember, setViewMember] = useState<Member | null>(null);
+  const [isSessionMode, setIsSessionMode] = useState(false);
+  const [isAddSessionOpen, setIsAddSessionOpen] = useState(false);
+  const [newSessionDate, setNewSessionDate] = useState('');
   
-  // Sorting State
   const [sortConfig, setSortConfig] = useState<{ date: string; type: 'present' | 'absent' } | null>(null);
   
-  // Add Member Form State
-  const [newMemberName, setNewMemberName] = useState('');
-  const [newMemberPhone, setNewMemberPhone] = useState('');
+  // Form State
+  const [memberFormData, setMemberFormData] = useState({ name: '', phone: '' });
 
-  // Reset sort when group changes
-  useEffect(() => {
-    setSortConfig(null);
-  }, [group.id]);
+  useEffect(() => { setSortConfig(null); }, [group.id]);
   
-  // Get all unique dates from the dataset, sorted
   const dates = useMemo(() => getAllDates(allGroups), [allGroups]);
   
   const filteredMembers = useMemo(() => {
@@ -43,32 +55,19 @@ const GroupDetail: React.FC<GroupDetailProps> = ({ group, onBack, allGroups, onB
         members = [...members].sort((a, b) => {
              const sA = a.attendance[sortConfig.date];
              const sB = b.attendance[sortConfig.date];
+             const getScore = (s: string | undefined, target: string) => s === target ? 2 : (s && s !== target ? 1 : 0);
              
-             if (sortConfig.type === 'present') {
-                 // Priority: Present(2) > Absent(1) > Empty(0)
-                 const getScore = (s: string | undefined) => s === 'P' ? 2 : (s === 'A' ? 1 : 0);
-                 const scoreDiff = getScore(sB) - getScore(sA);
-                 if (scoreDiff !== 0) return scoreDiff;
-             } else {
-                 // Priority: Absent(2) > Present(1) > Empty(0)
-                 const getScore = (s: string | undefined) => s === 'A' ? 2 : (s === 'P' ? 1 : 0);
-                 const scoreDiff = getScore(sB) - getScore(sA);
-                 if (scoreDiff !== 0) return scoreDiff;
-             }
-             // Secondary sort by name
-             return a.name.localeCompare(b.name);
+             const target = sortConfig.type === 'present' ? 'P' : 'A';
+             const scoreDiff = getScore(sB, target) - getScore(sA, target);
+             return scoreDiff !== 0 ? scoreDiff : 0;
         });
-    } else {
-         members.sort((a, b) => a.name.localeCompare(b.name));
     }
-
+    // No default sorting - strictly preserve CSV/Array order
     return members;
   }, [group.members, searchTerm, sortConfig]);
 
-  // Calculate stats for this specific group
   const groupStats = useMemo(() => {
-      let present = 0;
-      let total = 0;
+      let present = 0; let total = 0;
       group.members.forEach(m => {
           Object.values(m.attendance).forEach(status => {
               if (status === 'P') present++;
@@ -79,49 +78,60 @@ const GroupDetail: React.FC<GroupDetailProps> = ({ group, onBack, allGroups, onB
   }, [group]);
 
   const handleBulkAction = (status: AttendanceStatus) => {
-    if (actionDate) {
-      onBulkUpdate(group.id, actionDate, status);
-      setActionDate(null);
-    }
+    if (actionDate) { onBulkUpdate(group.id, actionDate, status); setActionDate(null); }
   };
 
   const handleSort = (type: 'present' | 'absent') => {
       if (actionDate) {
-          if (sortConfig?.date === actionDate && sortConfig.type === type) {
-              setSortConfig(null); // Toggle off if already active
-          } else {
-              setSortConfig({ date: actionDate, type });
-          }
+          setSortConfig(sortConfig?.date === actionDate && sortConfig.type === type ? null : { date: actionDate, type });
           setActionDate(null);
       }
   };
 
-  const handleAddMemberSubmit = (e: React.FormEvent) => {
+  const openAdd = () => {
+      setEditingMember(null);
+      setMemberFormData({ name: '', phone: '' });
+      setIsAddMemberOpen(true);
+  };
+
+  const openEditMember = (member: Member) => {
+      setEditingMember(member);
+      setMemberFormData({ name: member.name, phone: member.phone });
+      setIsAddMemberOpen(true);
+  };
+
+  const handleMemberSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (newMemberName.trim()) {
-      onAddMember(group.id, newMemberName.trim(), newMemberPhone.trim());
-      setNewMemberName('');
-      setNewMemberPhone('');
+    if (memberFormData.name.trim()) {
+      if (editingMember) {
+        onUpdateMember(group.id, editingMember.id, memberFormData.name.trim(), memberFormData.phone.trim());
+      } else {
+        onAddMember(group.id, memberFormData.name.trim(), memberFormData.phone.trim());
+      }
       setIsAddMemberOpen(false);
     }
   };
+
+  const handleNewSessionSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      if(newSessionDate) {
+          onAddSession(newSessionDate);
+          setIsAddSessionOpen(false);
+          setNewSessionDate('');
+      }
+  }
 
   return (
     <div className="space-y-4 animate-fade-in relative">
       {/* Header Area */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm sticky top-20 z-20">
         <div className="flex items-center gap-3">
-          <button 
-            onClick={onBack}
-            className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-600"
-          >
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-600">
             <ArrowLeft className="h-5 w-5" />
           </button>
           <div>
             <h2 className="text-lg font-bold text-slate-900 leading-tight">{group.leaderName}</h2>
-            <p className="text-sm text-slate-500">
-                {group.members.length} Youth • {groupStats}% Avg Attendance
-            </p>
+            <p className="text-sm text-slate-500">{group.members.length} Youth • {groupStats}% Avg Attendance</p>
           </div>
         </div>
 
@@ -140,8 +150,8 @@ const GroupDetail: React.FC<GroupDetailProps> = ({ group, onBack, allGroups, onB
             </div>
             
             <button 
-                onClick={() => setIsAddMemberOpen(true)}
-                className="flex items-center justify-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors whitespace-nowrap"
+                onClick={openAdd}
+                className="flex items-center justify-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-800 transition-colors"
             >
                 <UserPlus className="h-4 w-4" />
                 <span>Add Member</span>
@@ -149,361 +159,310 @@ const GroupDetail: React.FC<GroupDetailProps> = ({ group, onBack, allGroups, onB
         </div>
       </div>
 
-      {/* Table Container */}
+      {/* Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col pb-12">
         <div className="overflow-x-auto no-scrollbar">
           <table className="min-w-full divide-y divide-slate-200">
             <thead className="bg-slate-50">
               <tr>
-                <th scope="col" className="sticky left-0 z-10 bg-slate-50 px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider border-r border-slate-200 shadow-[4px_0_24px_-2px_rgba(0,0,0,0.05)] w-48">
-                  Member
-                </th>
+                <th className="sticky left-0 z-10 bg-slate-50 px-4 py-3 text-left text-xs font-bold text-slate-500 uppercase border-r border-slate-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] w-56">Member</th>
                 {dates.map(date => {
-                    const d = new Date(date);
-                    const isActionOpen = actionDate === date;
                     const isSorted = sortConfig?.date === date;
+                    const d = new Date(date);
                     return (
-                        <th 
-                            key={date} 
-                            onClick={() => setActionDate(date)}
-                            scope="col" 
-                            className={clsx(
-                                "px-2 py-3 text-center text-xs font-medium uppercase tracking-wider min-w-[60px] cursor-pointer transition-colors group relative select-none",
-                                isActionOpen ? "bg-brand-50 text-brand-700" : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                            )}
-                        >
-                            <div className="flex flex-col items-center justify-center gap-1">
-                                <div className="flex flex-col leading-tight items-center">
-                                    <span className="font-bold text-lg">{d.getDate()}</span>
-                                    <span className="text-[10px]">{d.toLocaleString('default', { month: 'short' })}</span>
-                                </div>
-                                <div className="h-4 flex items-center justify-center">
-                                    {isSorted ? (
-                                        <div className={clsx(
-                                            "flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full",
-                                            sortConfig.type === 'present' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                                        )}>
-                                            {sortConfig.type === 'present' ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
-                                            Sort
-                                        </div>
-                                    ) : (
-                                         <div className={clsx(
-                                            "h-1 w-8 rounded-full transition-all mt-1",
-                                            isActionOpen ? "bg-brand-500" : "bg-transparent group-hover:bg-slate-300"
-                                        )} />
-                                    )}
-                                </div>
+                        <th key={date} onClick={() => setActionDate(date)} className={clsx("px-2 py-3 text-center text-xs font-medium uppercase tracking-wider min-w-[70px] cursor-pointer hover:bg-slate-100 transition-colors group relative", isSorted && "bg-brand-50 text-brand-700")}>
+                            <div className="flex flex-col items-center">
+                                <span className="font-bold text-base">{d.getDate()}</span>
+                                <span className="text-[10px]">{d.toLocaleString('default', { month: 'short' })}</span>
+                                {isSorted && (
+                                    <div className={clsx("mt-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold", sortConfig.type === 'present' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700")}>
+                                        {sortConfig.type === 'present' ? 'P' : 'A'} Sorted
+                                    </div>
+                                )}
                             </div>
                         </th>
                     );
                 })}
+                <th className="px-2 py-3 text-center min-w-[70px]">
+                    <button onClick={() => setIsAddSessionOpen(true)} className="flex flex-col items-center justify-center w-full h-full text-slate-400 hover:text-brand-600 transition-colors">
+                        <CalendarPlus className="h-5 w-5 mb-1" />
+                        <span className="text-[9px] font-bold uppercase">Add</span>
+                    </button>
+                </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-slate-200">
               {filteredMembers.map((member) => (
-                <tr key={member.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="sticky left-0 z-10 bg-white px-4 py-3 whitespace-nowrap border-r border-slate-200 text-sm font-medium text-slate-900 shadow-[4px_0_24px_-2px_rgba(0,0,0,0.05)]">
-                    <div className="flex items-center justify-between gap-2">
-                        <div className="flex flex-col min-w-0">
-                            <span className="truncate max-w-[110px]" title={member.name}>{member.name}</span>
-                            {member.phone && (
-                                <a href={`tel:${member.phone}`} className="flex items-center text-xs text-slate-400 mt-0.5 hover:text-brand-600 w-fit">
-                                    <Phone className="h-3 w-3 mr-1 flex-shrink-0" />
-                                    <span className="truncate">{member.phone}</span>
-                                </a>
-                            )}
+                <tr key={member.id} className="hover:bg-slate-50 transition-colors group/row">
+                  <td className="sticky left-0 z-10 bg-white px-4 py-3 whitespace-nowrap border-r border-slate-200 text-sm shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                    <div className="flex items-center justify-between">
+                        <div className="flex flex-col min-w-0 pr-2">
+                            <span className="font-bold text-slate-900 truncate">{member.name}</span>
+                            {member.phone && <a href={`tel:${member.phone}`} className="text-xs text-slate-400 hover:text-brand-600">{member.phone}</a>}
                         </div>
-                        <button 
-                            onClick={() => setViewMember(member)}
-                            className="p-1.5 text-slate-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition-colors flex-shrink-0"
-                            title="View History"
-                        >
-                            <History className="h-4 w-4" />
-                        </button>
+                        <div className="flex items-center gap-1 opacity-0 group-hover/row:opacity-100 transition-opacity">
+                            <button onClick={() => setViewMember(member)} className="p-1 text-slate-400 hover:text-brand-600"><History className="h-3.5 w-3.5" /></button>
+                            <button onClick={() => openEditMember(member)} className="p-1 text-slate-400 hover:text-blue-600"><Edit2 className="h-3.5 w-3.5" /></button>
+                            <button onClick={() => onDeleteMember(group.id, member.id)} className="p-1 text-slate-400 hover:text-red-600"><Trash2 className="h-3.5 w-3.5" /></button>
+                        </div>
                     </div>
                   </td>
                   {dates.map(date => {
                       const status = member.attendance[date];
                       return (
-                        <td key={`${member.id}-${date}`} className="px-2 py-3 whitespace-nowrap text-center">
-                            <div className={clsx(
-                                "inline-flex items-center justify-center h-8 w-8 rounded-full text-xs font-bold transition-all",
-                                status === 'P' && "bg-green-100 text-green-700",
-                                status === 'A' && "bg-red-100 text-red-700",
-                                !status && "bg-slate-100 text-slate-300"
-                            )}>
-                                {status === 'P' && <Check className="h-4 w-4" />}
-                                {status === 'A' && <X className="h-4 w-4" />}
-                                {!status && <Minus className="h-4 w-4" />}
-                            </div>
+                        <td key={date} className="px-1 py-1 text-center p-0">
+                            <button 
+                                onClick={() => {
+                                    // Cycle: Empty -> P -> A -> Empty
+                                    const nextStatus = status === 'P' ? 'A' : status === 'A' ? '' : 'P';
+                                    onMarkAttendance(group.id, member.id, date, nextStatus);
+                                }}
+                                className="w-full h-full flex items-center justify-center py-2 focus:outline-none"
+                            >
+                                <div className={clsx("inline-flex items-center justify-center h-8 w-8 rounded-full text-xs font-bold transition-all transform active:scale-95", status === 'P' ? "bg-green-100 text-green-700" : status === 'A' ? "bg-red-100 text-red-700" : "bg-slate-50 text-slate-300 hover:bg-slate-100")}>
+                                    {status === 'P' ? <Check className="h-4 w-4" /> : status === 'A' ? <X className="h-4 w-4" /> : <Minus className="h-3 w-3" />}
+                                </div>
+                            </button>
                         </td>
                       );
                   })}
+                  <td className="bg-slate-50/50"></td>
                 </tr>
               ))}
             </tbody>
+            <tfoot className="bg-slate-50 border-t border-slate-200 sticky bottom-0 z-20 shadow-[0_-2px_5px_-2px_rgba(0,0,0,0.1)]">
+                <tr>
+                    <td className="sticky left-0 z-20 bg-slate-100 px-4 py-3 text-xs font-bold text-slate-600 uppercase border-r border-slate-200">
+                        Total Present
+                    </td>
+                    {dates.map(date => {
+                        const count = group.members.filter(m => m.attendance[date] === 'P').length;
+                        return (
+                            <td key={date} className="px-2 py-3 text-center">
+                                <span className={clsx("text-xs font-bold px-2 py-0.5 rounded-full", count > 0 ? "bg-green-200 text-green-800" : "text-slate-400")}>
+                                    {count}
+                                </span>
+                            </td>
+                        );
+                    })}
+                     <td className="bg-slate-100"></td>
+                </tr>
+            </tfoot>
           </table>
-          {filteredMembers.length === 0 && (
-              <div className="p-8 text-center text-slate-500 text-sm">
-                  No members found matching "{searchTerm}"
-              </div>
-          )}
         </div>
       </div>
 
-      {/* Action Modal (Date Headers) */}
-      {actionDate && (
-        <div 
-            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200" 
-            onClick={() => setActionDate(null)}
-        >
-            <div 
-                className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300" 
-                onClick={e => e.stopPropagation()}
-            >
+      {/* Add Session Modal */}
+      {isAddSessionOpen && (
+           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in" onClick={() => setIsAddSessionOpen(false)}>
+              <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                <form onSubmit={handleNewSessionSubmit}>
+                   <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                        <div className="flex items-center gap-2">
+                            <CalendarPlus className="h-5 w-5 text-brand-600" />
+                            <h3 className="text-lg font-bold text-slate-900">Add New Session</h3>
+                        </div>
+                        <button type="button" onClick={() => setIsAddSessionOpen(false)} className="p-2 text-slate-400"><X className="w-5 h-5" /></button>
+                   </div>
+                   <div className="p-5 space-y-4">
+                       <p className="text-sm text-slate-500">Select the date for the new attendance column. This will be added to all groups.</p>
+                       <div>
+                           <label className="block text-sm font-bold text-slate-700 mb-1">Session Date</label>
+                           <input 
+                                type="date" 
+                                required 
+                                value={newSessionDate}
+                                onChange={e => setNewSessionDate(e.target.value)}
+                                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-brand-500"
+                           />
+                       </div>
+                       <button type="submit" className="w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 transition-all">Create Session</button>
+                   </div>
+                </form>
+              </div>
+           </div>
+      )}
+
+      {/* Bulk Action / Sort Modal */}
+      {actionDate && !isSessionMode && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in" onClick={() => setActionDate(null)}>
+            <div className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom" onClick={e => e.stopPropagation()}>
                 <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
                     <div className="flex flex-col">
-                        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Quick Actions</span>
-                        <span className="text-lg font-bold text-slate-900">
-                            {new Date(actionDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-                        </span>
+                        <span className="text-xs font-bold text-slate-400 uppercase">Date Options</span>
+                        <span className="text-lg font-bold text-slate-900">{new Date(actionDate).toLocaleDateString()}</span>
                     </div>
-                    <button 
-                        onClick={() => setActionDate(null)} 
-                        className="p-2 bg-white rounded-full border border-slate-200 text-slate-400 hover:text-slate-600 transition-colors"
-                    >
-                        <X className="w-5 h-5" />
-                    </button>
+                    <button onClick={() => setActionDate(null)} className="p-2 bg-white rounded-full border border-slate-200 text-slate-400"><X className="w-5 h-5" /></button>
                 </div>
-                
                 <div className="p-4 space-y-3">
-                     {/* Sorting Section */}
-                    <div className="grid grid-cols-2 gap-3 mb-2">
-                        <button
-                            onClick={() => handleSort('present')}
-                            className={clsx(
-                                "flex flex-col items-center justify-center p-3 rounded-xl border transition-all active:scale-[0.98]",
-                                sortConfig?.date === actionDate && sortConfig.type === 'present' 
-                                    ? "bg-green-50 border-green-200 text-green-700 ring-1 ring-green-500" 
-                                    : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                            )}
-                        >
-                            <ArrowDown className="h-5 w-5 mb-1 text-green-600" />
-                            <span className="text-xs font-semibold">Present First</span>
+                    {/* Session Mode Launcher */}
+                    <button 
+                        onClick={() => setIsSessionMode(true)}
+                        className="w-full flex items-center justify-between p-4 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all mb-4 group"
+                    >
+                         <div className="flex items-center gap-3">
+                             <div className="p-2 bg-white/20 rounded-lg">
+                                <Zap className="h-5 w-5 text-white" />
+                             </div>
+                             <div className="text-left">
+                                 <p className="font-bold text-sm">Focus Session Mode</p>
+                                 <p className="text-[10px] text-indigo-200">Mobile-friendly marking</p>
+                             </div>
+                         </div>
+                         <ChevronRight className="h-5 w-5 text-indigo-300 group-hover:translate-x-1 transition-transform" />
+                    </button>
+
+                    <div className="grid grid-cols-2 gap-2 mb-2">
+                        <button onClick={() => handleSort('present')} className={clsx("flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-bold transition-all", sortConfig?.type === 'present' ? "bg-green-50 border-green-500 text-green-700" : "bg-white border-slate-200 text-slate-600")}>
+                            <ArrowDown className="h-3.5 w-3.5" /> Present First
                         </button>
-                        <button
-                            onClick={() => handleSort('absent')}
-                             className={clsx(
-                                "flex flex-col items-center justify-center p-3 rounded-xl border transition-all active:scale-[0.98]",
-                                sortConfig?.date === actionDate && sortConfig.type === 'absent' 
-                                    ? "bg-red-50 border-red-200 text-red-700 ring-1 ring-red-500" 
-                                    : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                            )}
-                        >
-                            <ArrowDown className="h-5 w-5 mb-1 text-red-600" />
-                            <span className="text-xs font-semibold">Absent First</span>
+                        <button onClick={() => handleSort('absent')} className={clsx("flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-bold transition-all", sortConfig?.type === 'absent' ? "bg-red-50 border-red-500 text-red-700" : "bg-white border-slate-200 text-slate-600")}>
+                            <ArrowDown className="h-3.5 w-3.5" /> Absent First
                         </button>
                     </div>
-
                     <div className="h-px bg-slate-100 my-2" />
-
-                    <p className="text-sm text-slate-500 mb-2">Update attendance for all displayed members.</p>
-                    
-                    <button 
-                        onClick={() => handleBulkAction('P')} 
-                        className="w-full flex items-center justify-between p-4 bg-green-50 text-green-700 rounded-xl hover:bg-green-100 border border-green-200 transition-all active:scale-[0.98]"
-                    >
-                        <span className="flex items-center gap-3 font-semibold">
-                            <div className="p-2 bg-green-200 rounded-full">
-                                <CheckCircle className="w-5 h-5" /> 
-                            </div>
-                            Mark All Present
-                        </span>
-                        <span className="text-xs font-bold bg-white/50 px-2 py-1 rounded-md">P</span>
+                    <button onClick={() => handleBulkAction('P')} className="w-full flex items-center justify-between p-4 bg-green-50 text-green-700 rounded-xl border border-green-200 font-bold">
+                        <span className="flex items-center gap-2"><CheckCircle className="w-5 h-5" /> Mark All Present</span>
+                        <span className="text-xs opacity-50">P</span>
                     </button>
-
-                    <button 
-                        onClick={() => handleBulkAction('A')} 
-                        className="w-full flex items-center justify-between p-4 bg-red-50 text-red-700 rounded-xl hover:bg-red-100 border border-red-200 transition-all active:scale-[0.98]"
-                    >
-                         <span className="flex items-center gap-3 font-semibold">
-                            <div className="p-2 bg-red-200 rounded-full">
-                                <XCircle className="w-5 h-5" /> 
-                            </div>
-                            Mark All Absent
-                        </span>
-                        <span className="text-xs font-bold bg-white/50 px-2 py-1 rounded-md">A</span>
+                    <button onClick={() => handleBulkAction('A')} className="w-full flex items-center justify-between p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 font-bold">
+                        <span className="flex items-center gap-2"><XCircle className="w-5 h-5" /> Mark All Absent</span>
+                        <span className="text-xs opacity-50">A</span>
                     </button>
-
-                    <div className="h-px bg-slate-100 my-2" />
-
-                    <button 
-                        onClick={() => handleBulkAction('')} 
-                        className="w-full flex items-center justify-center gap-2 p-3 text-slate-500 font-medium hover:bg-slate-50 rounded-lg transition-colors"
-                    >
-                        <Trash2 className="w-4 h-4" /> 
-                        Clear Attendance
-                    </button>
+                    <button onClick={() => handleBulkAction('')} className="w-full p-3 text-slate-500 text-sm font-medium hover:bg-slate-50 rounded-lg transition-colors">Clear All</button>
                 </div>
             </div>
         </div>
       )}
 
-      {/* Add Member Modal */}
+      {/* Full Screen Session Mode */}
+      {isSessionMode && actionDate && (
+          <div className="fixed inset-0 z-[60] bg-slate-50 flex flex-col animate-in slide-in-from-right duration-300">
+             {/* Session Header */}
+             <div className="bg-white px-4 py-4 border-b border-slate-200 flex items-center justify-between shadow-sm">
+                <div className="flex items-center gap-3">
+                    <button onClick={() => setIsSessionMode(false)} className="p-2 hover:bg-slate-100 rounded-full">
+                        <ChevronLeft className="h-6 w-6 text-slate-600" />
+                    </button>
+                    <div>
+                        <h2 className="text-lg font-bold text-slate-900 leading-none">Session Marking</h2>
+                        <p className="text-xs text-slate-500 mt-1">{new Date(actionDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+                    </div>
+                </div>
+                <div className="text-right">
+                    <p className="text-2xl font-bold text-brand-600">
+                        {group.members.filter(m => m.attendance[actionDate] === 'P').length}
+                        <span className="text-sm text-slate-400 font-medium">/{group.members.length}</span>
+                    </p>
+                </div>
+             </div>
+             
+             {/* Progress Bar */}
+             <div className="h-1.5 w-full bg-slate-100">
+                <div 
+                    className="h-full bg-brand-500 transition-all duration-300" 
+                    style={{ width: `${(group.members.filter(m => m.attendance[actionDate] !== '' && m.attendance[actionDate] !== undefined).length / group.members.length) * 100}%` }}
+                />
+             </div>
+
+             {/* Scrollable List */}
+             <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                 {filteredMembers.map(member => {
+                     const status = member.attendance[actionDate];
+                     return (
+                         <div key={member.id} className={clsx("flex items-center justify-between p-4 rounded-xl border-2 transition-all", status === 'P' ? "bg-green-50 border-green-500" : status === 'A' ? "bg-red-50 border-red-500" : "bg-white border-white shadow-sm")}>
+                             <div>
+                                 <p className="font-bold text-slate-900 text-lg">{member.name}</p>
+                                 {member.phone && <p className="text-xs text-slate-500">{member.phone}</p>}
+                             </div>
+                             <div className="flex items-center gap-2">
+                                 <button 
+                                    onClick={() => onMarkAttendance(group.id, member.id, actionDate, 'P')}
+                                    className={clsx("h-12 w-12 rounded-full flex items-center justify-center font-bold transition-all", status === 'P' ? "bg-green-600 text-white shadow-lg scale-110" : "bg-slate-100 text-slate-300 hover:bg-green-100 hover:text-green-600")}
+                                 >
+                                     P
+                                 </button>
+                                 <button 
+                                    onClick={() => onMarkAttendance(group.id, member.id, actionDate, 'A')}
+                                    className={clsx("h-12 w-12 rounded-full flex items-center justify-center font-bold transition-all", status === 'A' ? "bg-red-600 text-white shadow-lg scale-110" : "bg-slate-100 text-slate-300 hover:bg-red-100 hover:text-red-600")}
+                                 >
+                                     A
+                                 </button>
+                             </div>
+                         </div>
+                     );
+                 })}
+                 <div className="h-20" /> {/* Spacer */}
+             </div>
+             
+             {/* Footer Actions */}
+             <div className="bg-white border-t border-slate-200 p-4 safe-area-pb">
+                 <button 
+                    onClick={() => setIsSessionMode(false)}
+                    className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 active:scale-[0.98] transition-all"
+                 >
+                     Done Marking
+                 </button>
+             </div>
+          </div>
+      )}
+
+      {/* Add/Edit Member Modal */}
       {isAddMemberOpen && (
-          <div 
-            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200" 
-            onClick={() => setIsAddMemberOpen(false)}
-        >
-             <div 
-                className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300" 
-                onClick={e => e.stopPropagation()}
-            >
-                <form onSubmit={handleAddMemberSubmit}>
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in" onClick={() => setIsAddMemberOpen(false)}>
+             <div className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom" onClick={e => e.stopPropagation()}>
+                <form onSubmit={handleMemberSubmit}>
                     <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
                         <div className="flex items-center gap-2">
-                             <div className="bg-brand-100 p-1.5 rounded-lg text-brand-600">
+                             <div className="bg-brand-600 p-1.5 rounded-lg text-white">
                                 <UserPlus className="h-5 w-5" />
                             </div>
-                            <h3 className="text-lg font-bold text-slate-900">Add New Member</h3>
+                            <h3 className="text-lg font-bold text-slate-900">{editingMember ? 'Edit Member' : 'New Member'}</h3>
                         </div>
-                        <button 
-                            type="button"
-                            onClick={() => setIsAddMemberOpen(false)} 
-                            className="p-2 bg-white rounded-full border border-slate-200 text-slate-400 hover:text-slate-600 transition-colors"
-                        >
-                            <X className="w-5 h-5" />
-                        </button>
+                        <button type="button" onClick={() => setIsAddMemberOpen(false)} className="p-2 text-slate-400"><X className="w-5 h-5" /></button>
                     </div>
-
                     <div className="p-5 space-y-4">
                         <div>
-                            <label htmlFor="name" className="block text-sm font-medium text-slate-700 mb-1">Full Name <span className="text-red-500">*</span></label>
-                            <input
-                                id="name"
-                                type="text"
-                                required
-                                value={newMemberName}
-                                onChange={(e) => setNewMemberName(e.target.value)}
-                                placeholder="e.g. John Doe"
-                                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none transition-all"
-                                autoFocus
-                            />
+                            <label className="block text-sm font-bold text-slate-700 mb-1">Full Name</label>
+                            <input required value={memberFormData.name} onChange={e => setMemberFormData({...memberFormData, name: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-brand-500" placeholder="e.g. John Doe" autoFocus />
                         </div>
-
-                         <div>
-                            <label htmlFor="phone" className="block text-sm font-medium text-slate-700 mb-1">Phone Number</label>
-                            <input
-                                id="phone"
-                                type="tel"
-                                value={newMemberPhone}
-                                onChange={(e) => setNewMemberPhone(e.target.value)}
-                                placeholder="e.g. 9876543210"
-                                className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none transition-all"
-                            />
+                        <div>
+                            <label className="block text-sm font-bold text-slate-700 mb-1">Phone (Optional)</label>
+                            <input type="tel" value={memberFormData.phone} onChange={e => setMemberFormData({...memberFormData, phone: e.target.value})} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-brand-500" placeholder="e.g. 9876543210" />
                         </div>
-
-                        <div className="pt-2">
-                            <button 
-                                type="submit"
-                                className="w-full bg-slate-900 text-white font-medium py-3 rounded-lg hover:bg-slate-800 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-                            >
-                                <Plus className="h-5 w-5" />
-                                Add Member
-                            </button>
-                        </div>
+                        <button type="submit" className="w-full bg-slate-900 text-white font-bold py-4 rounded-xl hover:bg-slate-800 transition-all active:scale-[0.98]">
+                            {editingMember ? 'Update Member' : 'Add to Group'}
+                        </button>
                     </div>
                 </form>
             </div>
         </div>
       )}
 
-      {/* Member History Modal */}
+      {/* History Modal */}
       {viewMember && (
-          <div 
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200" 
-            onClick={() => setViewMember(null)}
-        >
-             <div 
-                className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[85vh]" 
-                onClick={e => e.stopPropagation()}
-            >
-                {/* Header */}
-                <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 flex-shrink-0">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in" onClick={() => setViewMember(null)}>
+             <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+                <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
                     <div className="flex items-center gap-3">
-                         <div className="bg-brand-100 p-2 rounded-full text-brand-600">
-                            <User className="h-5 w-5" />
-                        </div>
-                        <div>
-                            <h3 className="text-lg font-bold text-slate-900">{viewMember.name}</h3>
-                            <p className="text-xs text-slate-500">Attendance History</p>
-                        </div>
+                         <div className="bg-brand-100 p-2 rounded-full text-brand-600"><User className="h-5 w-5" /></div>
+                        <div><h3 className="text-lg font-bold text-slate-900">{viewMember.name}</h3><p className="text-xs text-slate-500">Attendance History</p></div>
                     </div>
-                    <button 
-                        onClick={() => setViewMember(null)} 
-                        className="p-2 bg-white rounded-full border border-slate-200 text-slate-400 hover:text-slate-600 transition-colors"
-                    >
-                        <X className="w-5 h-5" />
-                    </button>
+                    <button onClick={() => setViewMember(null)} className="p-2 bg-white rounded-full border border-slate-200 text-slate-400"><X className="w-5 h-5" /></button>
                 </div>
-
-                {/* Stats Summary */}
-                <div className="p-4 grid grid-cols-3 gap-3 border-b border-slate-100 flex-shrink-0 bg-white">
-                    {(() => {
-                        let p = 0; let a = 0;
-                        dates.forEach(d => {
-                            const s = viewMember.attendance[d];
-                            if (s === 'P') p++;
-                            if (s === 'A') a++;
-                        });
-                        const percentage = (p + a) > 0 ? Math.round((p / (p + a)) * 100) : 0;
-                        
-                        return (
-                            <>
-                               <div className="bg-green-50 p-3 rounded-xl border border-green-100 flex flex-col items-center justify-center">
-                                    <span className="text-2xl font-bold text-green-600">{p}</span>
-                                    <span className="text-xs font-medium text-green-600/80">Present</span>
-                               </div>
-                               <div className="bg-red-50 p-3 rounded-xl border border-red-100 flex flex-col items-center justify-center">
-                                    <span className="text-2xl font-bold text-red-600">{a}</span>
-                                    <span className="text-xs font-medium text-red-600/80">Absent</span>
-                               </div>
-                                <div className="bg-blue-50 p-3 rounded-xl border border-blue-100 flex flex-col items-center justify-center">
-                                    <span className="text-2xl font-bold text-blue-600">{percentage}%</span>
-                                    <span className="text-xs font-medium text-blue-600/80">Rate</span>
-                               </div>
-                            </>
-                        )
-                    })()}
-                </div>
-
-                {/* History List */}
                 <div className="overflow-y-auto p-4 space-y-2">
                     {dates.map(date => {
                         const status = viewMember.attendance[date];
                         const d = new Date(date);
-
                         return (
-                            <div key={date} className="flex items-center justify-between p-3 rounded-lg border border-slate-100 hover:bg-slate-50 transition-colors">
-                                <div className="flex items-center gap-3">
-                                    <Calendar className="h-4 w-4 text-slate-400" />
-                                    <span className="text-sm font-medium text-slate-700">
-                                        {d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                                    </span>
-                                </div>
-                                <div>
-                                    {status === 'P' && <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 border border-green-200">Present</span>}
-                                    {status === 'A' && <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 border border-red-200">Absent</span>}
-                                    {!status && <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-500 border border-slate-200">No Record</span>}
-                                </div>
+                            <div key={date} className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-white">
+                                <span className="text-sm font-bold text-slate-700">{d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</span>
+                                <span className={clsx("px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border", status === 'P' ? "bg-green-50 text-green-700 border-green-200" : status === 'A' ? "bg-red-50 text-red-700 border-red-200" : "bg-slate-50 text-slate-400 border-slate-200")}>
+                                    {status === 'P' ? 'Present' : status === 'A' ? 'Absent' : 'No Record'}
+                                </span>
                             </div>
                         );
                     })}
-                    {dates.length === 0 && (
-                        <div className="text-center text-slate-400 py-8 text-sm">
-                            No attendance dates configured.
-                        </div>
-                    )}
                 </div>
             </div>
         </div>

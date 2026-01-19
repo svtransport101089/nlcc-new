@@ -134,3 +134,39 @@ export const getAllDates = (groups: Group[]): string[] => {
     // Assuming all members have same date keys structure derived from CSV header
     return Object.keys(groups[0].members[0]?.attendance || {}).sort();
 }
+
+export const exportToCSV = (groups: Group[]): string => {
+  if (groups.length === 0) return '';
+
+  const dates = getAllDates(groups);
+  
+  // Headers
+  const headers = [
+    'Group_Id',
+    'Leader',
+    'Co_Leader',
+    'Month_Range',
+    'Member Name',
+    'PHONE NUMBER',
+    ...dates
+  ];
+
+  const rows = [headers.join(',')];
+
+  groups.forEach(group => {
+    group.members.forEach(member => {
+      const row = [
+        group.id,
+        `"${group.leaderName}"`,
+        `"${group.coLeaderName || ''}"`,
+        `"${group.monthRange}"`,
+        `"${member.name}"`,
+        `"${member.phone || ''}"`,
+        ...dates.map(date => member.attendance[date] || '')
+      ];
+      rows.push(row.join(','));
+    });
+  });
+
+  return rows.join('\n');
+};
